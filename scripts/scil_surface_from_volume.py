@@ -1,214 +1,188 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-scil_surface_from_volume.py  —  Python 3 port / replacement for the
-scilpy 1.x command of the same name (removed from scilpy 2.x).
 
-Extracts an isosurface from a labelled volumetric image (NIfTI) and saves it
-as a VTK PolyData mesh.  Mirrors the SBCI-pipeline calling convention:
+"""Correct ROI-to-surface conversion for the Python 3 ADNI SET branch.
 
-  scil_surface_from_volume.py <volume.nii.gz> <output.vtk>
-      --index  <label_value>
-      --closing <n>          (morphological closing iterations)
-      --opening <n>          (morphological opening iterations)
-      --smooth  <n>          (Laplacian smoothing iterations)
-      --vox2vtk              (convert voxel coords → scanner/mm coords)
-      --fill                 (fill internal holes before meshing)
-      --max_label            (use highest label instead of --index if set)
-      -f                     (overwrite output)
+The implementation matches the intended scilpy 1.x semantics used by the
+Python 2 branch: ``--index`` selects the ROI and ``--max_label`` retains its
+largest connected component.  Opening is reduced only when the requested
+iterations would otherwise erase a present small ROI.
 """
 
 import argparse
 import logging
-import numpy as np
+from pathlib import Path
+
 import nibabel as nib
+import numpy as np
 import vtk
 import vtk.util.numpy_support as ns
-
 from scipy import ndimage
-from os.path import isfile
-
-DESCRIPTION = __doc__
 
 
-def _build_args_parser():
-    p = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter,
-                                description=DESCRIPTION)
-
-    p.add_argument('volume',
-                   type=str, help='Input labelled volume (.nii / .nii.gz).')
-
-    p.add_argument('output',
-                   type=str, help='Output surface mesh (.vtk).')
-
-    p.add_argument('--index', type=int, default=None,
-                   help='Label index to extract as a surface.')
-
-    p.add_argument('--closing', type=int, default=0,
-                   help='Number of morphological closing iterations [%(default)s].')
-
-    p.add_argument('--opening', type=int, default=0,
-                   help='Number of morphological opening iterations [%(default)s].')
-
-    p.add_argument('--smooth', type=int, default=0,
-                   help='Number of Laplacian surface smoothing iterations [%(default)s].')
-
-    p.add_argument('--vox2vtk', action='store_true',
-                   help='Convert vertex coordinates from voxel to scanner (mm) space.')
-
-    p.add_argument('--fill', action='store_true',
-                   help='Fill internal holes in the binary mask before meshing.')
-
-    p.add_argument('--max_label', action='store_true',
-                   help='Extract the label with the highest index value in the volume '
-                        '(overrides --index).')
-
-    p.add_argument('-f', action='store_true', dest='overwrite',
-                   help='If set, overwrite files if they already exist.')
-
-    return p
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="Extract an ROI surface from a labelled NIfTI volume."
+    )
+    parser.add_argument("volume")
+    parser.add_argument("output")
+    parser.add_argument("--index", type=int, nargs="+")
+    parser.add_argument("--all", action="store_true")
+    parser.add_argument("--closing", type=int, default=0)
+    parser.add_argument("--opening", type=int, default=0)
+    parser.add_argument("--erosion", type=int, default=0)
+    parser.add_argument("--dilation", type=int, default=0)
+    parser.add_argument("--smooth", type=int, default=0)
+    parser.add_argument("--vox2vtk", action="store_true")
+    parser.add_argument("--fill", action="store_true")
+    parser.add_argument("--max_label", action="store_true")
+    parser.add_argument("-f", "--force", action="store_true")
+    return parser
 
 
-def _binary_mask(data, index):
-    """Return a boolean mask for voxels matching *index*."""
-    return (data == index).astype(np.uint8)
+def largest_component(mask, parser):
+    objects, count = ndimage.label(mask)
+    if count < 1:
+        parser.error("No connected component remains after morphology.")
+    sizes = np.bincount(objects.ravel())
+    sizes[0] = 0
+    return objects == int(np.argmax(sizes))
 
 
-def _morphological_ops(mask, closing=0, opening=0, fill=False):
-    """Apply closing, opening, and optional hole-filling to a binary mask."""
-    struct = ndimage.generate_binary_structure(3, 1)   # 6-connectivity
+def adaptive_morphology(mask, args, parser):
+    base = mask.astype(bool)
+    if args.erosion > 0:
+        base = ndimage.binary_erosion(base, iterations=args.erosion)
+    if args.dilation > 0:
+        base = ndimage.binary_dilation(base, iterations=args.dilation)
+    if not np.any(base):
+        parser.error("ROI was erased by erosion/dilation.")
 
-    if closing > 0:
-        for _ in range(closing):
-            mask = ndimage.binary_dilation(mask, structure=struct).astype(np.uint8)
-        for _ in range(closing):
-            mask = ndimage.binary_erosion(mask, structure=struct).astype(np.uint8)
+    requested = args.opening
+    for opening in range(requested, -1, -1):
+        candidate = base
+        if opening > 0:
+            candidate = ndimage.binary_opening(
+                candidate, iterations=opening
+            )
+        if args.closing > 0:
+            candidate = ndimage.binary_closing(
+                candidate, iterations=args.closing
+            )
+        if np.any(candidate):
+            if opening != requested:
+                logging.warning(
+                    "Opening reduced from %d to %d because the requested "
+                    "morphology erased this ROI.", requested, opening
+                )
+            return candidate
 
-    if opening > 0:
-        for _ in range(opening):
-            mask = ndimage.binary_erosion(mask, structure=struct).astype(np.uint8)
-        for _ in range(opening):
-            mask = ndimage.binary_dilation(mask, structure=struct).astype(np.uint8)
-
-    if fill:
-        # flood-fill from a corner to find background, invert = interior holes
-        filled = ndimage.binary_fill_holes(mask.astype(bool))
-        mask = filled.astype(np.uint8)
-
-    return mask
+    parser.error("ROI is empty after all morphology fallbacks.")
 
 
-def _marching_cubes(mask, affine, vox2vtk):
-    """Run VTK marching cubes on *mask* and return vtkPolyData."""
-    # Build a vtkImageData from the numpy mask
-    dims = mask.shape
+def marching_cubes(mask, affine, vox2vtk, parser):
+    image_data = vtk.vtkImageData()
+    image_data.SetDimensions(*mask.shape)
+    image_data.SetSpacing(1.0, 1.0, 1.0)
+    image_data.SetOrigin(0.0, 0.0, 0.0)
 
-    img_data = vtk.vtkImageData()
-    img_data.SetDimensions(dims[0], dims[1], dims[2])
-    img_data.SetSpacing(1.0, 1.0, 1.0)
-    img_data.SetOrigin(0.0, 0.0, 0.0)
+    array = ns.numpy_to_vtk(
+        mask.flatten(order="F").astype(np.float32),
+        deep=True, array_type=vtk.VTK_FLOAT
+    )
+    array.SetName("mask")
+    image_data.GetPointData().SetScalars(array)
 
-    flat = mask.flatten(order='F').astype(np.float32)
-    vtk_arr = ns.numpy_to_vtk(flat, deep=True, array_type=vtk.VTK_FLOAT)
-    vtk_arr.SetName('mask')
-    img_data.GetPointData().SetScalars(vtk_arr)
+    extractor = vtk.vtkMarchingCubes()
+    extractor.SetInputData(image_data)
+    extractor.SetValue(0, 0.5)
+    extractor.Update()
+    surface = extractor.GetOutput()
 
-    # Marching cubes at iso-value 0.5
-    mc = vtk.vtkMarchingCubes()
-    mc.SetInputData(img_data)
-    mc.SetValue(0, 0.5)
-    mc.Update()
+    if surface.GetNumberOfPoints() == 0 or surface.GetNumberOfCells() == 0:
+        parser.error("Marching cubes produced an empty surface.")
 
-    surface = mc.GetOutput()
-
-    if surface.GetNumberOfPoints() == 0:
-        raise RuntimeError('Marching cubes produced no surface — '
-                           'check that the label exists in the volume.')
-
-    # Optionally transform vertices from voxel indices to scanner (mm) coords
-    if vox2vtk and affine is not None:
-        pts_np = ns.vtk_to_numpy(surface.GetPoints().GetData())
-
-        # pts_np are ijk (col-major / VTK ordering) — convert to RAS mm
-        ones = np.ones((pts_np.shape[0], 1), dtype=pts_np.dtype)
-        pts_h = np.hstack([pts_np, ones])
-        pts_mm = (affine @ pts_h.T).T[:, :3]
-
-        vtk_pts = vtk.vtkPoints()
-        vtk_pts.SetData(ns.numpy_to_vtk(pts_mm.astype(np.float32), deep=True))
-        surface.SetPoints(vtk_pts)
+    if vox2vtk:
+        # VTK/SET space is LPS: legacy trimeshpy vox_to_vtk applied diag(-1,-1,1,1) after
+        # the (RAS) NIfTI affine, matching the cortical surfaces step 2 flips to LPS.
+        affine = np.diag([-1.0, -1.0, 1.0, 1.0]) @ affine
+        points = ns.vtk_to_numpy(surface.GetPoints().GetData())
+        homogeneous = np.hstack(
+            [points, np.ones((points.shape[0], 1), dtype=points.dtype)]
+        )
+        transformed = (affine @ homogeneous.T).T[:, :3]
+        vtk_points = vtk.vtkPoints()
+        vtk_points.SetData(ns.numpy_to_vtk(
+            transformed.astype(np.float32), deep=True
+        ))
+        surface.SetPoints(vtk_points)
 
     return surface
 
 
-def _smooth_surface(surface, n_iter):
-    """Apply Laplacian smoothing to *surface* for *n_iter* iterations."""
-    if n_iter <= 0:
-        return surface
-
-    smoother = vtk.vtkSmoothPolyDataFilter()
-    smoother.SetInputData(surface)
-    smoother.SetNumberOfIterations(n_iter)
-    smoother.Update()
-
-    return smoother.GetOutput()
-
-
 def main():
-    parser = _build_args_parser()
+    parser = build_parser()
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO,
+                        format="%(levelname)s:%(message)s")
 
-    if not isfile(args.volume):
-        parser.error('The file "{0}" must exist.'.format(args.volume))
+    source = Path(args.volume)
+    output = Path(args.output)
+    if not source.is_file():
+        parser.error(f"Input volume does not exist: {source}")
+    if output.exists() and not args.force:
+        parser.error(f"Output exists; use -f: {output}")
 
-    if isfile(args.output):
-        if args.overwrite:
-            logging.info('Overwriting "{0}".'.format(args.output))
-        else:
-            parser.error('The file "{0}" already exists. Use -f to overwrite it.'.format(
-                args.output))
+    image = nib.load(str(source))
+    volume = np.asarray(image.dataobj)
 
-    logging.info('Loading volume: {0}'.format(args.volume))
-    img = nib.load(args.volume)
-    data = np.asarray(img.dataobj).astype(np.int32)
-    affine = img.affine
-
-    # Determine which label to extract
-    if args.max_label:
-        index = int(data.max())
-        logging.info('Using max label: {0}'.format(index))
-    elif args.index is not None:
-        index = args.index
+    if args.index:
+        mask = np.zeros(volume.shape, dtype=bool)
+        for index in args.index:
+            mask = np.logical_or(mask, volume == index)
+        selected_description = ",".join(map(str, args.index))
+    elif args.all:
+        mask = volume > 0
+        selected_description = "all-positive"
     else:
-        parser.error('Must specify --index <label> or --max_label.')
+        parser.error("Specify --index or --all.")
 
-    logging.info('Extracting label {0} ...'.format(index))
-    mask = _binary_mask(data, index)
+    raw_voxels = int(np.count_nonzero(mask))
+    if raw_voxels == 0:
+        parser.error("Requested ROI is absent from the input volume.")
 
-    if mask.sum() == 0:
-        parser.error('Label {0} is not present in the volume.'.format(index))
+    mask = adaptive_morphology(mask, args, parser)
+    if args.max_label:
+        mask = largest_component(mask, parser)
+    if args.fill:
+        mask = ndimage.binary_fill_holes(mask)
 
-    mask = _morphological_ops(mask, closing=args.closing,
-                              opening=args.opening, fill=args.fill)
+    final_voxels = int(np.count_nonzero(mask))
+    if final_voxels == 0:
+        parser.error("ROI is empty immediately before marching cubes.")
 
-    logging.info('Running marching cubes ...')
-    surface = _marching_cubes(mask, affine, vox2vtk=args.vox2vtk)
-
+    surface = marching_cubes(mask, image.affine, args.vox2vtk, parser)
     if args.smooth > 0:
-        logging.info('Smoothing surface ({0} iterations) ...'.format(args.smooth))
-        surface = _smooth_surface(surface, args.smooth)
-
-    logging.info('Saving surface: {0}  ({1} pts, {2} cells)'.format(
-        args.output,
-        surface.GetNumberOfPoints(),
-        surface.GetNumberOfCells()))
+        smoother = vtk.vtkSmoothPolyDataFilter()
+        smoother.SetInputData(surface)
+        smoother.SetNumberOfIterations(args.smooth)
+        smoother.Update()
+        surface = smoother.GetOutput()
 
     writer = vtk.vtkPolyDataWriter()
     writer.SetInputData(surface)
-    writer.SetFileName(args.output)
-    writer.Update()
+    writer.SetFileName(str(output))
+    writer.Write()
+
+    if not output.is_file() or output.stat().st_size == 0:
+        parser.error("Surface writer returned without a nonempty output.")
+
+    logging.info(
+        "ROI %s: raw_voxels=%d final_voxels=%d points=%d cells=%d",
+        selected_description, raw_voxels, final_voxels,
+        surface.GetNumberOfPoints(), surface.GetNumberOfCells()
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

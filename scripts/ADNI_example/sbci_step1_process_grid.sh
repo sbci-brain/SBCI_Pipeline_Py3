@@ -105,6 +105,22 @@ python3 "${SBCI_SCRIPTS}/concon/normalise_m.py" \
         --surface "${OUTPUT_PATH}/tmp_rh_grid.m" \
         --output  "${OUTPUT_PATH}/rh_grid_avg_${RESOLUTION}.m" -f
 
+# concon requires both vertices and faces.  VTK 9 writes polygon connectivity
+# differently from VTK 8, and older converters could silently create a
+# vertex-only .m file that made c3_main emit an empty raw kernel.
+for GRID in \
+    "${OUTPUT_PATH}/lh_grid_avg_${RESOLUTION}.m" \
+    "${OUTPUT_PATH}/rh_grid_avg_${RESOLUTION}.m"
+do
+    VERTEX_COUNT=$(grep -c '^Vertex ' "${GRID}" || true)
+    FACE_COUNT=$(grep -c '^Face ' "${GRID}" || true)
+    echo "Validated concon grid ${GRID}: ${VERTEX_COUNT} vertices, ${FACE_COUNT} faces"
+    if [ "${VERTEX_COUNT}" -eq 0 ] || [ "${FACE_COUNT}" -eq 0 ]; then
+        echo "ERROR: Invalid concon grid ${GRID}: vertices=${VERTEX_COUNT}, faces=${FACE_COUNT}" >&2
+        exit 1
+    fi
+done
+
 python3 "${SBCI_SCRIPTS}/normalise_vtk.py" \
         --surface "${OUTPUT_PATH}/lh_sphere_avg_${RESOLUTION}.vtk" \
         --output  "${OUTPUT_PATH}/lh_grid_avg_${RESOLUTION}.vtk" -f
@@ -159,7 +175,7 @@ python3 "${SBCI_SCRIPTS}/generate_grid_triangulation.py" \
 # LOOP THROUGH AVAILABLE PARCELLATIONS #
 ########################################
 
-GROUP_PARCELLATIONS=($(ls "${REFDIR}/label/lh.*.annot"))
+GROUP_PARCELLATIONS=(${REFDIR}/label/lh.*.annot)
 
 for PARCELLATION_FILE in "${GROUP_PARCELLATIONS[@]}"; do
 

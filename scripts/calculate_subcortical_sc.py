@@ -5,6 +5,9 @@
 
 import argparse
 import logging
+import os
+import re
+import shlex
 import vtk
 
 import numpy as np
@@ -37,6 +40,9 @@ def _build_args_parser():
     p.add_argument('--output', action='store', metavar='OUTPUT', required=True,
                    type=str, help='Path of the .npz file of structural connectivity matrix.')
 
+    p.add_argument('--roi_count', action='store', type=int, default=None,
+                   help='Number of configured subcortical ROIs. If omitted, read ROIS from SBCI_CONFIG.')
+
     p.add_argument('-f', action='store_true', dest='overwrite',
                    help='If set, overwrite files if they already exist.')
 
@@ -49,6 +55,20 @@ def to_latlon(coords):
     lon = np.arctan2(coords[:, 1], coords[:, 0])
 
     return np.vstack([lat, lon]).T
+
+
+def _roi_count_from_config():
+    config_path = os.environ.get('SBCI_CONFIG')
+    if not config_path or not isfile(config_path):
+        return None
+
+    with open(config_path, 'r') as handle:
+        for line in handle:
+            match = re.match(r'^\s*ROIS\s*=\s*\((.*?)\)\s*(?:#.*)?$', line)
+            if match:
+                return len(shlex.split(match.group(1)))
+
+    return None
 
 
 def main():
@@ -111,7 +131,19 @@ def main():
 
     logging.info('ROIs: {0}'.format(rois))
 
-    n = len(rois)
+    # Historical SBCI semantics use matrix row/column ROI_ID - 2.
+    # The configured ADNI ROIS array has 19 entries, mapped to IDs 2..20.
+    # Keep that fixed row count even when a subject has no streamlines for an
+    # ROI; absent regions remain explicit zero rows and columns.
+    n = args.roi_count
+    if n is None:
+        n = _roi_count_from_config()
+    if n is None or n < 1:
+        parser.error('Provide --roi_count or an SBCI_CONFIG containing a one-line ROIS=(...) array.')
+    if rois.size and int(rois.max()) > n + 1:
+        parser.error('Observed surface ID {0} exceeds configured ROI range 2..{1}.'.format(
+            int(rois.max()), n + 1))
+    logging.info('Subcortical matrix rows represent configured ROI IDs 2..{0}.'.format(n + 1))
     subsub_mask = in_mask & out_mask
     subsub_sc = np.zeros([n, n])
 

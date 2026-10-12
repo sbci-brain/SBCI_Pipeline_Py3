@@ -542,6 +542,7 @@ def main():
     print(args.rois)
 
     new_streamlines = ROI_Streamlines([],[],[],[],[],[],[])
+    out_of_bounds_samples = 0
 
     for i in range(len(streamlines)):
         # just one segment
@@ -569,17 +570,28 @@ def main():
             inds = np.dot(resampled_streamline, transform)
             inds = inds + offset
 
-            if inds.min().round(decimals = 6) < 0:
-                logging.error('Streamline has points that map to negative voxel indices')
-
-            ii, jj, kk = inds.astype(int).T
-            sl_labels = label_data[ii, jj, kk]
+            # Samples outside the parcellation volume are not valid ROI
+            # observations.  Assign background (0) instead of clipping them
+            # onto a boundary voxel or allowing NumPy negative-index wrapping.
+            voxel_indices = inds.astype(int)
+            valid = np.all(voxel_indices >= 0, axis=1)
+            valid &= np.all(voxel_indices < np.asarray(label_data.shape), axis=1)
+            sl_labels = np.zeros(len(voxel_indices), dtype=label_data.dtype)
+            if np.any(valid):
+                ii, jj, kk = voxel_indices[valid].T
+                sl_labels[valid] = label_data[ii, jj, kk]
+            out_of_bounds_samples += int(np.sum(~valid))
 
             # split fibers among intersecting regions and return all intersections
             split_streamlines = split_subcortical_streamline(resampled_streamline, sl_labels, args.rois, tri_in[j], tri_out[j])
 
             # fill the results arrays
             new_streamlines.extend(split_streamlines)
+
+    if out_of_bounds_samples:
+        logging.warning(
+            'Assigned background label to {0} streamline samples outside '
+            'the parcellation volume.'.format(out_of_bounds_samples))
 
     logging.info('Saving {0} final streamlines.'.format(len(new_streamlines.streamlines)))
     

@@ -106,6 +106,7 @@ scil_tractogram_convert \
     set/streamline/set_random_loop${RUN}.fib \
     --reference diffusion/fodf/fodf.nii.gz \
     --legacy_vtk \
+    --no_bbox_check \
     -f
 
 # ------------------------------------------------------------------ #

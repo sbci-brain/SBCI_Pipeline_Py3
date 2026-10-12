@@ -8,22 +8,65 @@
 DATASET_NAME=ADNI
 
 ###########################################################################################
-# Change these to the b-values available in the data for DTI and FODF estimation
+# Which b-value shells reach DTI and fODF (preproc_step2_t1_dwi_registration.sh)
 # ------------------------------------------------------------------------------
-# The abCD data have values of around 0, 1000, 2000, and 3000
+# SHELL_POLICY:
+#   nearest_1000  DTI and fODF both use the non-zero shell nearest b=1000
+#   all           fODF uses every non-zero shell; DTI keeps the shell nearest b=1000
+#   explicit      use DTI_BVALS and FODF_BVALS below, as written
+# DTI_BVALS / FODF_BVALS are read only under SHELL_POLICY=explicit.
+# Multi-shell data with no SHELL_POLICY stops the registration stage before it runs.
+#
+# ADNI protocols are mixed -- (0,1000), (0,500,1000,2000), (0,2000) -- and the ADNI
+# processing has always used the single shell nearest b=1000, so that is declared here.
 ###########################################################################################
 
+SHELL_POLICY=nearest_1000
 DTI_BVALS=(0 1000)
 FODF_BVALS=(0 1000)
+
+###########################################################################################
+# fODF spherical-harmonic order (preproc_step4_fodf_estimation.sh)
+# ------------------------------------------------------------------------------
+# Order L needs at least (L+1)(L+2)/2 unique gradient directions: 6 -> 28, 8 -> 45,
+# 10 -> 66. The fODF stage refuses an order the data cannot support. ADNI has ~55.
+###########################################################################################
+
+SH_ORDER=6
+
+# FODF_MODEL: auto fits single-shell CSD to one shell and multi-shell multi-tissue CSD to
+# several; ssst fits single-shell CSD to however many shells reach the fODF stage (the
+# lab's historical ABCD/HCP recipe). ADNI's fODF is single-shell, so this changes nothing.
+FODF_MODEL=auto
+
+###########################################################################################
+# Resting-state fMRI timing (preproc_step5_fmri.sh)
+# ------------------------------------------------------------------------------
+# FMRI_TR            when set, every subject's BIDS RepetitionTime must equal it; leave it
+#                    unset to take the TR from each subject's BIDS JSON
+# FMRI_SKIP_SECONDS  leading time discarded for T1 saturation; frames = round(seconds / TR)
+# FMRI_POLYFIT       detrending polynomial order
+# FMRI_STC           FSFast slice-timing order (siemens, up, down, odd, even) or none
+# ADNI: TR 3 s, 48 slices, Siemens interleaved. FMRI_TR=3 keeps other ADNI protocols
+# (e.g. multiband TR 0.6 s) from being processed with these settings.
+###########################################################################################
+
+FMRI_TR=3
+FMRI_SKIP_SECONDS=12
+FMRI_POLYFIT=2
+FMRI_STC=siemens
+# FMRI_MOTION_REGRESSORS: mcextreg (FSFast's own motion estimates) or tsv (each run's
+# BIDS *_motion.tsv, as the lab's ABCD/HCP processing used).
+FMRI_MOTION_REGRESSORS=mcextreg
 
 ###########################################################################################
 # Change these to point to your local installation of SBCI
 ###########################################################################################
 
-PSC_PATH=/nas/longleaf/home/zz10c/software/PSC_Pipeline/
-SBCI_PATH=/nas/longleaf/home/zz10c/software/SBCI_Pipeline/
+PSC_PATH=/path/to/PSC_Pipeline/
+SBCI_PATH=/path/to/SBCI_Pipeline/
 FREESURFER_PATH=/nas/longleaf/apps/freesurfer/6.0.0/freesurfer/
-OUTPUT_PATH=/overflow/zzhanglab/ADNI/ADNI-bids/SBCI_AVE
+OUTPUT_PATH=/path/to/outputs
 
 ###########################################################################################
 # SC options: N_RUN number of times to run SET in parallel (SET)

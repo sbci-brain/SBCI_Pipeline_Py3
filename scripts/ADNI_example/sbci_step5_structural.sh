@@ -92,8 +92,21 @@ python3 "${SBCI_SCRIPTS}/concon/intersections_to_sphere.py" \
     --LOAD_grid_file "${OUTPUT_PATH}/lh_grid_avg_${RESOLUTION}.m" \
     --LOAD_rh_grid_file "${OUTPUT_PATH}/rh_grid_avg_${RESOLUTION}.m"
 
+RAW_KERNEL="${OUTPUTDIR}/subject_avg_${BANDWIDTH}_${RESOLUTION}.raw"
+RAW_BYTES=$(stat -c '%s' "${RAW_KERNEL}" 2>/dev/null || echo 0)
+if [ "${RAW_BYTES}" -le 4 ]; then
+    LH_VERTICES=$(grep -c '^Vertex ' "${OUTPUT_PATH}/lh_grid_avg_${RESOLUTION}.m" || true)
+    LH_FACES=$(grep -c '^Face ' "${OUTPUT_PATH}/lh_grid_avg_${RESOLUTION}.m" || true)
+    RH_VERTICES=$(grep -c '^Vertex ' "${OUTPUT_PATH}/rh_grid_avg_${RESOLUTION}.m" || true)
+    RH_FACES=$(grep -c '^Face ' "${OUTPUT_PATH}/rh_grid_avg_${RESOLUTION}.m" || true)
+    echo "ERROR: concon wrote an empty kernel (${RAW_BYTES} bytes): ${RAW_KERNEL}" >&2
+    echo "Grid counts: LH vertices=${LH_VERTICES} faces=${LH_FACES}; RH vertices=${RH_VERTICES} faces=${RH_FACES}" >&2
+    echo "Regenerate the shared grid with the current vtk_to_m.py before retrying step 5." >&2
+    exit 1
+fi
+
 python3 "${SBCI_SCRIPTS}/concon/convert_raw.py" \
-        --input         "${OUTPUTDIR}/subject_avg_${BANDWIDTH}_${RESOLUTION}.raw" \
+        --input         "${RAW_KERNEL}" \
         --intersections "${OUTPUTDIR}/snapped_fibers.npz" \
         --mesh          "${OUTPUT_PATH}/mapping_avg_${RESOLUTION}.npz" \
         --output        "${OUTPUTDIR}/smoothed_sc_avg_${BANDWIDTH}_${RESOLUTION}" -f

@@ -37,17 +37,38 @@ fi
 
 mkdir -p dwi_pipeline/sbci_connectome
 
-# Locate all BOLD runs
-find ./fmri/bold/ -regextype sed -regex ".*/[0-9]\+$" -type d -print0 \
-    > ./dwi_pipeline/sbci_connectome/fcruns
+# Locate all preprocessed BOLD runs.  A raw func/ directory is not sufficient:
+# step 6 consumes the three FSFast residual files written by preprocessing.
+if [ ! -d ./fmri/bold ]; then
+    echo "ERROR: Missing preprocessed fMRI directory: $(pwd)/fmri/bold" >&2
+    echo "Run and QC preproc_step5_fmri.sh, then make sure fmri is linked into this branch tree." >&2
+    exit 1
+fi
 
-TS_LIST=""
+FCRUNS=./dwi_pipeline/sbci_connectome/fcruns
+find ./fmri/bold/ -regextype sed -regex ".*/[0-9]\+$" -type d -print0 \
+    | sort -z > "${FCRUNS}"
+
+if [ ! -s "${FCRUNS}" ]; then
+    echo "ERROR: No numeric BOLD run directories found below $(pwd)/fmri/bold" >&2
+    echo "Expected paths such as fmri/bold/001 containing FC residual images." >&2
+    exit 1
+fi
+
+TS_LIST=()
 run=1
 
 while IFS= read -r -d '' FCDIR; do
 
     FCOUTPUTDIR=./dwi_pipeline/sbci_connectome/RUN$(printf '%03d' "${run}")
     mkdir -p "${FCOUTPUTDIR}"
+
+    for REQUIRED in fc.surface.lh.nii.gz fc.surface.rh.nii.gz fc.mni.nii.gz; do
+        if [ ! -s "${FCDIR}/${REQUIRED}" ]; then
+            echo "ERROR: Missing or empty preprocessed fMRI input: ${FCDIR}/${REQUIRED}" >&2
+            exit 1
+        fi
+    done
 
     # Step1) Convert BOLD timeseries into SBCI format
     python3 "${SBCI_SCRIPTS}/convert_fsfast_timeseries.py" \
@@ -59,13 +80,13 @@ while IFS= read -r -d '' FCDIR; do
             --output "${FCOUTPUTDIR}/fc_ts.npz" -f
 
     run=$((run + 1))
-    TS_LIST="${TS_LIST} ${FCOUTPUTDIR}/fc_ts.npz"
+    TS_LIST+=("${FCOUTPUTDIR}/fc_ts.npz")
 
-done < ./dwi_pipeline/sbci_connectome/fcruns
+done < "${FCRUNS}"
 
 # Step2) Join all the runs into a single timeseries
 python3 "${SBCI_SCRIPTS}/concatenate_timeseries.py" \
-        --time_series ${TS_LIST} \
+        --time_series "${TS_LIST[@]}" \
         --output ./dwi_pipeline/sbci_connectome/fc_ts.npz -f
 
 # Step3) Calculate FC matrix at the given resolution in template space

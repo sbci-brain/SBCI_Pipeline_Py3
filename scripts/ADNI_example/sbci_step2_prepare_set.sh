@@ -233,7 +233,18 @@ scil_surface_smooth set/out_surf/surfaces.vtk set/out_surf/smoothed.vtk \
         --nb_steps 2 \
         --step_size 2.0 -f
 
-python3 "${SBCI_SCRIPTS}/scil_surface_flow.py" \
+CONSISTENT_FLOW_SCRIPT="${SBCI_SCRIPTS}/scil_surface_flow_consistent_20260810.py"
+CONSISTENT_FLOW_SHA256="a2a8508363afa52be2e5288ca842d0884b5c1e1c1d21647f22fafd4eee404099"
+[[ -s "${CONSISTENT_FLOW_SCRIPT}" ]] || {
+    echo "ERROR: Missing consistent surface-flow script: ${CONSISTENT_FLOW_SCRIPT}" >&2
+    exit 1
+}
+[[ "$(sha256sum "${CONSISTENT_FLOW_SCRIPT}" | awk '{print $1}')" == "${CONSISTENT_FLOW_SHA256}" ]] || {
+    echo "ERROR: Consistent surface-flow script hash mismatch" >&2
+    exit 1
+}
+
+python3 "${CONSISTENT_FLOW_SCRIPT}" \
         set/out_surf/smoothed.vtk set/out_surf/flow_${STEPS}_1.vtk \
         --vts_mask set/out_surf/flow_mask.npy \
         --nb_step "${STEPS}" \

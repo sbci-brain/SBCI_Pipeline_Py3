@@ -29,6 +29,27 @@ Giovanni Schifitto, Maxime Descoteaux, and Zhengwu Zhang.
 study functional and structural connectivity." Human Brain Mapping 42, no. 11
 (2021): 3481-3499.
 
+## Changes in October 2026
+
+- **Preprocessing stages in Python 3.** `scripts/ADNI_example/preproc_step2`–`5`: T1–DWI
+  registration, FreeSurfer, fODF estimation and FSFast resting-state cleaning, ported to
+  scilpy 2.x and MRtrix 3.
+- **Other datasets.** Shell selection is explicit (`SHELL_POLICY`, `DTI_BVALS`/`FODF_BVALS`,
+  `FODF_TOLERANCE`; multi-shell data stops until one is chosen), and the fODF model follows the
+  shells (`FODF_MODEL=auto` fits multi-shell multi-tissue CSD; `ssst` keeps the single-shell
+  fit). fMRI timing comes from the config (`FMRI_TR`, `FMRI_SKIP_SECONDS`, `FMRI_POLYFIT`,
+  `FMRI_STC`, `FMRI_MOTION_REGRESSORS=mcextreg|tsv`), and FSFast handles several rest runs.
+  Example settings for ABCD and HCP Aging/Development are in `scripts/profiles/`; the
+  `_historical` ones reproduce the lab's existing databases (single-shell fODF, ABCD with 3 SET
+  runs, legacy shell selection via `FODF_TOLERANCE=19`).
+- **Fix: subcortical ROI surfaces are in LPS again.** `scil_surface_from_volume.py --vox2vtk`
+  had dropped the x/y flip that the Python 2 version (trimeshpy `vox_to_vtk`) applied, so ROI
+  meshes were mirrored relative to the cortical surfaces. With the fix, ABCD subcortical SC
+  matches the lab database (r 0.92 -> 0.99, mass 2.6x -> 0.94x); earlier Python 3 subcortical
+  SC is affected.
+- **Checked against the lab's historical connectomes:** ABCD (3 subjects) cortical SC
+  r 0.976–0.978 and FC r 0.912–0.991; HCP Aging cortical SC r 0.974 and FC r 0.959.
+
 ## Installing Prerequisites
 
 If using a managed system such as Bluehive (UofR), Longleaf (UNC), or Sherlock

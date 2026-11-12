@@ -289,6 +289,15 @@ def trim_cortical_streamline(streamline, sl_id, locator, surface_mask, surface_t
     return new_streamlines, ids_in, ids_out, surf_in, surf_out
 
 
+def lps_to_voxel(affine):
+    """(transform, offset) with voxel index = int(points @ transform + offset).
+
+    The streamlines and surfaces are LPS but the label image affine is RAS, so
+    x and y are negated first; without it every label is read at (-x, -y, z)."""
+    inv = np.linalg.inv(np.asarray(affine, dtype=float)) @ np.diag([-1., -1., 1., 1.])
+    return inv[:3, :3].T, inv[:3, 3] + 0.5
+
+
 # split streamlines into #ROIs choose 2 fibers and filter out non-intersecting tracts 
 def split_subcortical_streamline(streamline, label_data, rois, tri_in, tri_out):
     # somewhere to put results
@@ -532,11 +541,8 @@ def main():
     label_data = np.asarray(label_img.dataobj).astype(int)
     voxel_dim = label_img.header['pixdim'][1:4]
     
-    # calculate transform from voxel to mm coordinates
-    affine = np.array(label_img.affine, dtype=float)
-    affine = np.linalg.inv(affine)
-    transform = affine[:3, :3].T
-    offset = affine[:3, 3] + 0.5
+    # calculate transform from mm (LPS) to voxel coordinates
+    transform, offset = lps_to_voxel(label_img.affine)
 
     logging.info('Trimming, splitting, and filtering {0} streamlines.'.format(len(streamlines)))
     print(args.rois)

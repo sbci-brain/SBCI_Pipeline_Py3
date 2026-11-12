@@ -91,7 +91,8 @@ def main():
 
     # Sample volume at each vertex using nearest-neighbour interpolation
     ones = np.ones((n_pts, 1), dtype=np.float64)
-    verts_h = np.hstack([vertices.astype(np.float64), ones])      # (N, 4)
+    # The surfaces are LPS (as step 2 writes them) and the volume affine is RAS.
+    verts_h = np.hstack([vertices.astype(np.float64) * [-1., -1., 1.], ones])  # (N, 4)
     ijk = (inv_affine @ verts_h.T).T[:, :3]                       # fractional voxel coords
 
     # Round to nearest voxel and clip to valid range

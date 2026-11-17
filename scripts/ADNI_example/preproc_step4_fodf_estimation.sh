@@ -84,10 +84,18 @@ if [ "$N_FODF_SHELLS" -gt 1 ] && [ "${FODF_MODEL:-auto}" != ssst ]; then
         DTI_BVAL_LIMIT=$(( LOWEST_SHELL + 50 ))
     fi
 
-    scil_frf_msmt dwi_fodf.nii.gz fodf.bval fodf.bvec frf_wm.txt frf_gm.txt frf_csf.txt \
-        --mask b0_mask_resampled.nii.gz --mask_wm ../structure/mask_wm.nii.gz \
-        --mask_gm ../structure/mask_gm.nii.gz --mask_csf ../structure/mask_csf.nii.gz \
-        --roi_radii 20 --tolerance 50 --dti_bval_limit ${DTI_BVAL_LIMIT} -f
+    # Each tissue needs >= 100 voxels in the cube around the volume centre. Noisy, highly
+    # accelerated scans (SMS factor 6 x in-plane 2) raise grey-matter FA above the 0.2
+    # threshold, leaving too few GM voxels in the default 20-voxel cube; only then is the
+    # cube widened. The thresholds stay scilpy's, and data that passes at 20 is unchanged.
+    for ROI_RADIUS in 20 30 40; do
+        scil_frf_msmt dwi_fodf.nii.gz fodf.bval fodf.bvec frf_wm.txt frf_gm.txt frf_csf.txt \
+            --mask b0_mask_resampled.nii.gz --mask_wm ../structure/mask_wm.nii.gz \
+            --mask_gm ../structure/mask_gm.nii.gz --mask_csf ../structure/mask_csf.nii.gz \
+            --roi_radii ${ROI_RADIUS} --tolerance 50 --dti_bval_limit ${DTI_BVAL_LIMIT} -f && break
+        [ "$ROI_RADIUS" = 40 ] && { echo "ERROR: scil_frf_msmt failed even with --roi_radii 40" >&2; exit 1; }
+        echo "scil_frf_msmt failed with --roi_radii ${ROI_RADIUS}; retrying with a wider cube"
+    done
 
     # MSMT solves a constrained QP per voxel: on one core an HCP subject takes hours.
     # Voxels are fitted independently, so the process count does not change the result.
@@ -96,17 +104,20 @@ if [ "$N_FODF_SHELLS" -gt 1 ] && [ "${FODF_MODEL:-auto}" != ssst ]; then
     FODF_PROCESSES=$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc)
     scil_fodf_msmt dwi_fodf.nii.gz fodf.bval fodf.bvec frf_wm.txt frf_gm.txt frf_csf.txt \
         --sh_order ${SH_ORDER:-8} --skip_b0_check --mask b0_mask_resampled.nii.gz \
-        --tolerance 50 --processes ${FODF_PROCESSES} --not_all --wm_out_fODF fodf/fodf.nii.gz -f
+        --tolerance 50 --processes ${FODF_PROCESSES} --not_all --wm_out_fODF fodf/fodf.nii.gz -f \
+        || { echo "ERROR: scil_fodf_msmt failed" >&2; exit 1; }
 else
 # compute FRF
 scil_frf_ssst dwi_fodf.nii.gz fodf.bval fodf.bvec frf.txt \
 	--mask b0_mask_resampled.nii.gz \
-        --fa_thresh 0.7 --min_fa_thresh 0.5 --min_nvox 300 --roi_radii 20 -f
+        --fa_thresh 0.7 --min_fa_thresh 0.5 --min_nvox 300 --roi_radii 20 -f \
+    || { echo "ERROR: scil_frf_ssst failed" >&2; exit 1; }
 
 # compute fodf and fodf metrics
 scil_fodf_ssst dwi_fodf.nii.gz fodf.bval fodf.bvec frf.txt fodf/fodf.nii.gz \
  --sh_order ${SH_ORDER:-6} --skip_b0_check --mask b0_mask_resampled.nii.gz \
- --processes 1 -f
+ --processes 1 -f \
+    || { echo "ERROR: scil_fodf_ssst failed" >&2; exit 1; }
 fi
 
 scil_fodf_max_in_ventricles fodf/fodf.nii.gz dti/fa.nii.gz dti/md.nii.gz \

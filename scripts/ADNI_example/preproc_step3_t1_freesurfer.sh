@@ -2,6 +2,8 @@
 
 # run freesurfer for t1 image
 
+[ -n "${SBCI_CONFIG:-}" ] && source "${SBCI_CONFIG}"
+
 echo "Begin T1 Freesurfer preprocessing: $(date)"
 
 cd structure
@@ -14,7 +16,11 @@ if [ -d "./t1_freesurfer" ]; then
 fi
 
 # t1 image name is T1_dti_final, should be in the "structure" folder
-recon-all -subjid t1_freesurfer -i t1_wholebrain_warped.nii.gz -all
+# -openmp: FreeSurfer's parallel steps use the cores this job may use (CPU affinity = the
+# Slurm allocation; plain nproc would honour OMP_NUM_THREADS=1, which Longleaf sets in batch
+# jobs). FREESURFER_THREADS=1 in sbci_config restores the single-threaded run.
+FS_THREADS=${FREESURFER_THREADS:-$(env -u OMP_NUM_THREADS -u OMP_THREAD_LIMIT nproc)}
+recon-all -subjid t1_freesurfer -i t1_wholebrain_warped.nii.gz -all -openmp ${FS_THREADS}
 
 # get to the subject specific folder;
 cd t1_freesurfer

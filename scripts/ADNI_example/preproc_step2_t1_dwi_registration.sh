@@ -128,7 +128,10 @@ mrcalc diffusion/data.nii.gz diffusion/b0_bet_mask.nii.gz \
 	 -mult diffusion/dwi_bet.nii.gz -quiet -force
 
 # N4_DWI
-N4BiasFieldCorrection -i diffusion/b0_bet.nii.gz \
+# N4 output depends on its ITK thread count, which defaults to the number of cores: an 8-core
+# run differed from a 16-core run here and in every later output (2026-11-14). A fixed 16 keeps
+# results identical on any machine and matches the earlier 16-CPU Longleaf runs.
+ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=16 N4BiasFieldCorrection -i diffusion/b0_bet.nii.gz \
         -o [diffusion/b0_n4.nii.gz, diffusion/bias_field_b0.nii.gz] \
         -c [300x150x75x50, 1e-6] -v 1
 
@@ -186,12 +189,16 @@ mrthreshold diffusion/b0_resampled.nii.gz diffusion/b0_mask_resampled.nii.gz --a
 # denoise and bias field correction for t1 image
 scil_denoising_nlmeans t1.nii.gz structure/t1_denoised.nii.gz --basic_sigma --number_coils 1 -f
 
-N4BiasFieldCorrection -i structure/t1_denoised.nii.gz \
+# Fixed thread count, as for N4_DWI above.
+ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=16 N4BiasFieldCorrection -i structure/t1_denoised.nii.gz \
         -o [structure/t1_n4.nii.gz, structure/bias_field_t1.nii.gz] \
         -c [300x150x75x50, 1e-6] -v 1
 
 # bet t1
-antsBrainExtraction.sh -d 3 -a structure/t1_n4.nii.gz -e ${TEMPLATEDIR}/t1/t1_template.nii.gz \
+# One ITK thread: multithreaded, two runs on the same T1 gave masks ~1,300 voxels apart (Dice
+# 0.9997) and every later output differed; single-threaded runs are byte-identical (~28 min
+# instead of ~5 on HCP-Aging, measured 2026-10-25).
+ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=1 antsBrainExtraction.sh -d 3 -a structure/t1_n4.nii.gz -e ${TEMPLATEDIR}/t1/t1_template.nii.gz \
         -o bet/ -m ${TEMPLATEDIR}/t1/t1_brain_probability_map.nii.gz -u 0
 
 mrcalc structure/t1_n4.nii.gz bet/BrainExtractionMask.nii.gz -mult structure/t1_bet.nii.gz -force
@@ -243,7 +250,9 @@ scil_dti_metrics diffusion/dwi_dti.nii.gz diffusion/dti.bval diffusion/dti.bvec 
 # registration between t1 and diffusion imaging data can use multiple threads
 export ITK_GLOBAL_DEFAULT_NUMBER_OF_THREADS=1
 
-$SRUN antsRegistration --dimensionality 3 --float 0\
+# Fixed seed: by default antsRegistration seeds its metric sampling from the clock,
+# so the transform differed on every run (measured 2026-10-27).
+$SRUN antsRegistration --dimensionality 3 --float 0 --random-seed 1\
         --output [output,outputWarped.nii.gz,outputInverseWarped.nii.gz]\
         --interpolation Linear --use-histogram-matching 0\
         --winsorize-image-intensities [0.005,0.995]\

@@ -3,7 +3,7 @@
 | Field | Value |
 |---|---|
 | Status | validated |
-| Release | RELEASE_TAG |
+| Release | 2026.11.22 |
 | Date | 2026-11-21 |
 | Subject | one HCP Young Adult participant |
 | Profile | profile.conf |

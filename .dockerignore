@@ -1,0 +1,13 @@
+**/__pycache__/
+**/*.py[cod]
+.git/
+.pytest_cache/
+outputs/
+reports/
+logs/
+*.sif
+*.nii
+*.nii.gz
+*.mat
+!data/**/*.mat
+!data/**/*.nii.gz

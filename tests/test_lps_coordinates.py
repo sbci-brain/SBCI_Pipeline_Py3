@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+SCRIPTS = Path(__file__).resolve().parents[1] / "pipeline"
 HAVE_VTK = all(importlib.util.find_spec(name) for name in ("vtk", "nibabel", "scipy"))
 
 

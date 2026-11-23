@@ -1,0 +1,10 @@
+# Scripts run on Linux (clusters, the container): check out every text file with LF,
+# whatever core.autocrlf says. A CRLF copy would break every shell script.
+* text=auto eol=lf
+
+# Not part of the public pipeline: `git archive` leaves these out, and
+# tests/test_public_tree.py scans everything else for lab-specific content.
+#   container/  the image recipe (moves to the images repository)
+#   lab/        lab-only and deployment helpers (private staging)
+container/ export-ignore
+lab/ export-ignore

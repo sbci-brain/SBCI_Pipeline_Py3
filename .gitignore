@@ -1,12 +1,4 @@
-.idea
-.vscode
-.agents/
-.claude/
-.codex/
-tmp
-_portability_edit/
-
-*.pyc
-*.log
 __pycache__/
-env_setup/*.txt
+*.pyc
+/sbci-full.sif
+/.sbci-image-tmp/

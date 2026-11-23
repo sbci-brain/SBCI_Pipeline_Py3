@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "asset": "data/concon/c3_main",
+  "bytes": 40006712,
+  "sha256": "03109ebc87781fada22bc4cd62b52151920eafa0f753b8c2607d2363aeaf309a",
+  "mode": "0755",
+  "parts": [
+    {
+      "path": "data/concon/c3_main.part-00",
+      "bytes": 14000000,
+      "sha256": "8051bb97ea5d2dc12da20bc41e0cc1a3eaaacd94fa7e76d58585b87f131fd38e"
+    },
+    {
+      "path": "data/concon/c3_main.part-01",
+      "bytes": 14000000,
+      "sha256": "fbb920245a74de96e7c26513d3e3b62c6f9b8dce6161bbba8b305583b6bf00eb"
+    },
+    {
+      "path": "data/concon/c3_main.part-02",
+      "bytes": 12006712,
+      "sha256": "cd8f8c2315dfbaf30a7e5c506ec6c3dd8ab28e8d184a887d13e362719d30e15f"
+    }
+  ]
+}

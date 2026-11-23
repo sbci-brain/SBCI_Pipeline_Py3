@@ -1,263 +1,137 @@
-# SBCI
+# SBCI: surface-based connectivity integration (Python 3)
 
-Surface-Based Connectivity Integration
+SBCI builds structural connectivity (SC) and functional connectivity (FC) on the white-matter
+surface, without an atlas. This repository runs it end to end for one subject: raw BIDS (or
+data already corrected by HCP- or ABCD-style pipelines) → distortion correction → FreeSurfer →
+diffusion and fODF → FSFast resting-state cleaning → SC and FC on the ico4 grid (5124 × 5124
+cortical vertices plus 19 subcortical regions).
 
-This is an advanced MRI post-processing pipeline that builds structural
-connectivity (SC) and functional connectivity (FC) on the white matter surface
-of the brain and returns three imaging biomarkers representative of the
-relationships between SC and FC.
+Reference: Cole M, Murray K, St-Onge E, Risk B, Zhong J, Schifitto G, Descoteaux M, Zhang Z.
+Surface-Based Connectivity Integration: an atlas-free approach to jointly study functional and
+structural connectivity. *Human Brain Mapping* 42(11):3481–3499, 2021.
 
-This repository contains the Python 3 version of the SBCI scripts. It follows
-the same general protocol as the current SBCI pipeline, with the Python
-environment and script names updated for Python 3. The old `-py3` filename
-suffix has been removed because this is a standalone Python 3 repository.
+## One subject in three commands
 
-What you will need:
-
-1. T1w anatomical data
-2. Multi-shell dwi data
-3. Resting-state fMRI data
-
-The data are assumed to be minimaly preprocessed - i.e., using FSL's pipeline
-to perforrm eddy correction and susceptibility-induced distortion correction.
-
-**Reference**:
-
-Martin Cole, Kyle Murray, Etienne St-Onge, Benjamin Risk, Jianhui Zhong,
-Giovanni Schifitto, Maxime Descoteaux, and Zhengwu Zhang.
-"Surface-Based Connectivity Integration: An atlas-free approach to jointly
-study functional and structural connectivity." Human Brain Mapping 42, no. 11
-(2021): 3481-3499.
-
-## Changes in October 2026
-
-- **Preprocessing stages in Python 3.** `scripts/ADNI_example/preproc_step2`–`5`: T1–DWI
-  registration, FreeSurfer, fODF estimation and FSFast resting-state cleaning, ported to
-  scilpy 2.x and MRtrix 3.
-- **Other datasets.** Shell selection is explicit (`SHELL_POLICY`, `DTI_BVALS`/`FODF_BVALS`,
-  `FODF_TOLERANCE`; multi-shell data stops until one is chosen), and the fODF model follows the
-  shells (`FODF_MODEL=auto` fits multi-shell multi-tissue CSD; `ssst` keeps the single-shell
-  fit). fMRI timing comes from the config (`FMRI_TR`, `FMRI_SKIP_SECONDS`, `FMRI_POLYFIT`,
-  `FMRI_STC`, `FMRI_MOTION_REGRESSORS=mcextreg|tsv`), and FSFast handles several rest runs.
-  Example settings for ABCD and HCP Aging/Development are in `scripts/profiles/`; the
-  `_historical` ones reproduce the lab's existing databases (single-shell fODF, ABCD with 3 SET
-  runs, legacy shell selection via `FODF_TOLERANCE=19`).
-- **Fix: subcortical ROI surfaces are in LPS again.** `scil_surface_from_volume.py --vox2vtk`
-  had dropped the x/y flip that the Python 2 version (trimeshpy `vox_to_vtk`) applied, so ROI
-  meshes were mirrored relative to the cortical surfaces. With the fix, ABCD subcortical SC
-  matches the lab database (r 0.92 -> 0.99, mass 2.6x -> 0.94x); earlier Python 3 subcortical
-  SC is affected.
-- **Checked against the lab's historical connectomes:** ABCD (3 subjects) cortical SC
-  r 0.976–0.978 and FC r 0.912–0.991; HCP Aging cortical SC r 0.974 and FC r 0.959.
-
-## Installing Prerequisites
-
-If using a managed system such as Bluehive (UofR), Longleaf (UNC), or Sherlock
-(Stanford) with Slurm and module management included, prerequisites should be
-able to be installed using commands similar to these:
+On Linux (or WSL) with Apptainer and MATLAB on `PATH` (on a cluster, load both before
+submitting, e.g. `module load apptainer matlab`):
 
 ```bash
-module purge
-module load qt gcc mrtrix3 freesurfer ants fsl
-module rm python
-module load java matlab dcm2niix pigz anaconda
-module load git
+git clone https://github.com/sbci-brain/SBCI_Pipeline_Py3.git && cd SBCI_Pipeline_Py3
+bash workflow/get_image.sbatch                                   # once: fetches the image
+bash workflow/submit.sh --output=OUT/slurm-%j.out workflow/run_subject.sbatch IN OUT
 ```
 
-Otherwise, steps for installing some of the prerequisite software are included
-later in this document.
-
-It's recommended that you create a `.bashrc_sbci` file in your home folder and
-add these lines (along with others mentioned below) to a `.bashrc_sbci` file so
-that you can source it everytime the pipeline is sent to a cluster. See the
-section **Using a Bashrc File** for more information.
-
-### Setting up the Python Environment
-
-If you have Anaconda installed (either through a module or manually, see
-below), the following commands set up a clean Python 3 environment with the
-neccesary packages installed. Python 3.11 is recommended for the tested package
-set.
+`IN` holds one subject folder and an `sbci_local.json`; `OUT` must exist. Before the long run,
+the same script gives a preflight in seconds:
 
 ```bash
-conda create -n sbci python=3.11 pip -y
-conda activate sbci
-
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install -r requirements.txt
+bash workflow/run_subject.sbatch --inspect IN OUT
 ```
 
-Append the following line to `.bashrc_sbci` (or the script file that's executed
-when a user logs in), so that the correct Python environment is running each
-time the pipeline is used.
+It prints whether the run is ready, each stage's missing commands, and anything that blocks it.
+The run itself takes 6–18 h on 16 CPUs, through Slurm where there is one and otherwise in the
+background. A rerun on the same `OUT` resumes after the last completed stage. Results land in
+`OUT/sbci_output/files/work/<subject>/dwi_pipeline/sbci_connectome/`:
+
+| File | Content |
+|---|---|
+| `smoothed_sc_avg_0.005_ico4.mat` | cortical SC, 5124 × 5124 |
+| `sub_sc_avg_0.005_ico4.mat` | subcortical SC: region × region and region × surface |
+| `fc_avg_ico4.mat` | FC, 5124 × 5124 |
+
+### `sbci_local.json`
+
+Copy `datasets/sbci_local.example.json` and set two things:
+
+- `workflow.preprocessing_config`: the dataset profile, by its place in this repository
+  (`datasets/adni/profile.conf`) or as a path to your own copy;
+- `workflow.freesurfer_license`: the path of your FreeSurfer `license.txt` (free from
+  FreeSurfer's site; the image has none).
+
+For data corrected upstream also set `workflow.distortion_corrected_input` (and
+`workflow.bold_topup_fieldmaps` where the BOLD is raw), as the dataset's `README.md` says.
+`workflow/contracts/sbci.local.schema.json` lists every setting.
+
+## Datasets
+
+The datasets differ in settings, not in code: every dataset runs the same stage scripts, and
+`datasets/<name>/` holds its profile, the input it expects and the record of its validation.
+See [`datasets/README.md`](datasets/README.md).
+
+| Route | Input | The pipeline does |
+|---|---|---|
+| `raw` | scanner output in BIDS, DWI in one phase-encoding direction | Synb0-DISCO + topup + eddy on the DWI; FUGUE on the BOLD |
+| `corrected` | DWI and BOLD corrected upstream | nothing; it starts at preprocessing |
+| `corrected_dwi_raw_bold` | DWI corrected upstream, raw BOLD with a spin-echo fieldmap pair | topup on the BOLD |
+
+## What it needs
+
+- **Linux (or WSL) with Apptainer.**
+- **The image `sbci-full`**, which holds every tool: FSL 6.0.7, ANTs 2.6.0, MRtrix3 3.0.8,
+  FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch`
+  fetches it once per clone, pinned by digest, to `sbci-full.sif` in this folder (about 11 GB
+  to download, then 2–3 hours packing on 4 cores; needs internet, so on a cluster run it
+  where there is some). Set `SBCI_FULL_IMAGE` to use a copy elsewhere.
+- **MATLAB** (R2018b validated, a Linux install) on `PATH`, for the FSFast stage
+  (`selxavg3-sess`); the job binds it into the image. It is not optional: the SBCI stage runs
+  only after every preprocessing stage, so without MATLAB no subject finishes, SC included.
+  FreeSurfer 6's compiled `selxavg3` does not replace it (it needs MATLAB Runtime R2014a;
+  FreeSurfer 6 ships R2012b).
+- **A FreeSurfer licence file**, named in `sbci_local.json`.
+
+### The image
+
+The pipeline holds no tool paths. It finds the tools on the image's `PATH` and through these
+variables, which the image sets:
+
+| Variable | Content |
+|---|---|
+| `FSLDIR`, `ANTSPATH`, `FREESURFER_HOME` | FSL, ANTs and FreeSurfer (with `SUBJECTS_DIR`, `FSFAST_HOME`, `MNI_*`, `PERL5LIB`); MRtrix3 and the `synb0` command are on `PATH` |
+| `SBCI_ENV` | the preprocessing Python environment (scilpy 2.3.0) |
+| `SBCI_CORE_PY` | the Python that runs the SBCI stage |
+| `SBCI_TEMPLATE_DIR` | the MNI 152 symmetric 2009c template used for brain extraction |
+| `SBCI_PIPELINE` | a copy of this repository at the release the image was built for |
+| `SBCI_IMAGE` | the release tag and pipeline commit |
+
+The image carries a copy of the pipeline so that it runs on its own; a clone of this
+repository runs its own code with the image's tools (the job scripts pass the clone's folder
+as `SBCI_PIPELINE`). The image recipe is in the `SBCI_Images` repository.
+
+## Reproducibility
+
+Two runs of the same input on the same image agree in every value of the surfaces and SC, and
+in FC to about 1e-9 across CPU types. The pipeline pins what would otherwise vary:
+
+- N4 bias correction runs with 16 ITK threads on any machine, and brain extraction with one;
+- `antsRegistration` has a fixed seed;
+- numpy and OpenBLAS use the same kernels on every CPU type (`workflow/runtime_env.sh`).
+
+One step cannot be pinned: Synb0-DISCO's own registration seeds from the clock, so on the
+`raw` route everything after it differs slightly from run to run (eddy-corrected data
+correlate at about 0.998).
+
+## Layout
+
+| Folder | Content |
+|---|---|
+| `run_pipeline.py` | the entry point: inspects a subject or runs its next stage |
+| `pipeline/` | the SBCI stages: grid, SET tractography, snapping, SC, FC |
+| `preprocessing/` | registration, FreeSurfer, fODF and fMRI stages, driven by the profile |
+| `corrections/` | the raw-input routes: Synb0, topup, eddy, FUGUE |
+| `workflow/` | the driver: planning, resume, preflight, Slurm or background submission |
+| `datasets/` | one folder per dataset: profile, expected input, validation record |
+| `data/` | fsaverage reference surfaces, the ico4 grid, the `concon` kernel `c3_main` |
+| `tests/` | unit tests |
 
 ```bash
-conda activate sbci
+python3 -m unittest discover -s tests
 ```
 
-### Installing the SBCI Pipeline
+Tests that need VTK, nibabel or POSIX permissions skip elsewhere.
 
-Clone this Python 3 SBCI pipeline repository and install the Python
-requirements:
+## Optional: the `sbci` analysis package
 
-```bash
-git clone https://github.com/<OWNER>/<REPO>.git
-cd <REPO>
-conda activate sbci
-python -m pip install -r requirements.txt
-```
-
-The Python 3 scripts are located directly in:
-
-```bash
-scripts/
-```
-
-The ADNI example wrapper scripts are located in:
-
-```bash
-scripts/ADNI_example/
-```
-
-The `sbci_config` file needs to be updated according to the local computing
-environment. For the ADNI example, it is located at:
-
-```bash
-scripts/ADNI_example/sbci_config
-```
-
-This repository keeps the original SBCI workflow style. The main Python 3 batch
-submission command is:
-
-```bash
-bash process_sbci.sh SUBJECT_LIST SUBJECTS_DIR scripts/ADNI_example
-```
-
-where `SUBJECT_LIST` is a text file with one subject ID per line,
-`SUBJECTS_DIR` is the directory containing the subject folders, and
-`scripts/ADNI_example` is the directory containing the six SBCI step scripts and
-`sbci_config`.
-
-The submitted ADNI SBCI steps are:
-
-1. `sbci_step1_process_grid.sh`
-2. `sbci_step2_prepare_set.sh`
-3. `sbci_step3_run_set.sh`
-4. `sbci_step4_process_surfaces.sh`
-5. `sbci_step5_structural.sh`
-6. `sbci_step6_functional.sh`
-
-Python 3 notes:
-
-- The old `-py3` script suffix has been removed.
-- The wrapper scripts use `python3`.
-- `SBCI_SCRIPTS` points to this repository's `scripts/` directory.
-- scilpy command names follow the scilpy 2.x command line tools, including
-  `scil_surface_flip`, `scil_surface_smooth`, `scil_tracking_pft_maps`, and
-  `scil_tractogram_convert`.
-
-SBCI should now be installed. Check scripts in `scripts/ADNI_example` for an
-example of how to use the SBCI pipeline on ADNI-style data.
-
-### Installing the PSC Pipeline
-
-Clone the PSC pipeline:
-
-```bash
-git clone https://github.com/zhengwu/PSC_Pipeline.git
-```
-
-See the README.md file on the github website for PSC. The PSC pipeline remains
-an external dependency, as in the original SBCI workflow. Update `PSC_PATH` in
-`sbci_config` and add the PSC scripts to your path in `.bashrc_sbci`.
-
-### Alternative Installation of Prerequisites
-
-If using a system without module management, prerequisites can be installed
-manually:
-
-- **Anaconda**: Follow the insctructions
-  [here](https://docs.anaconda.com/anaconda/install/linux/). Test the
-  installatioin by running the command `which python`. If there are issues, try
-  adding the anaconda path to `.bashrc_sbci` (or the script file that's executed
-  when a user logs in), like so.
-
-  ```bash
-  export PATH="/PATH/TO/ANACONDA/bin:$PATH"
-  ```
-
-  Replacing `/PATH/TO/ANACONDA/` with the location of the anaconda
-  installation.
-
-- **Freesurfer**: Follow the instructions
-  [here](https://surfer.nmr.mgh.harvard.edu/fswiki/rel6downloads); if using
-  Ubuntu, libpng12 might be an issue.
-
-- **mrtrix**: `conda install -c mrtrix3 mrtrix3`
-
-- **ANTs**: Download and unzip a copy of ANTs
-  [here](http://stnava.github.io/ANTs/) and place in a suitable folder
-  (`/home/yourname/Software/ANTs`, for example). After the installation is
-  done, append the following lines to `.bashrc_sbci` (or the script file that's
-  executed when a user logs in).
-
-  ```bash
-  export ANTSPATH=/home/yourname/Software/ANTs/install/bin
-  export PATH=${ANTSPATH}:$PATH
-  export PATH="$HOME/Software/ANTs/Scripts:$PATH"
-  ```
-
-  Run the following commands to validate the installation:
-
-  ```bash
-  which antsRegistration
-  antsRegistrationSyN.sh
-  ```
-
-- **FSL**: Follow the instructions
-  [here](https://fsl.fmrib.ox.ac.uk/fsl/fslwiki/FslInstallation/).
-
-## Using a Bashrc File
-
-So that the working environment is the same each time the pipeline is run, it
-is recommended to create a `.bashrc_sbci` to be sourced each time the pipeline
-is run. The following is an example of a .bashrc file that works for a managed
-cluster environment. Just change `/PATH/TO/PSC_PIPELINE/` and
-`/PATH/TO/SBCI_PY3/` to the location of the PSC installation and this Python 3
-SBCI repository.
-
-```bash
-# .bashrc_sbci
-
-module purge
-module load qt gcc mrtrix3 freesurfer ants fsl
-module load java matlab dcm2niix pigz anaconda
-module load git
-module unload python
-
-# Needed to make conda play nice on managed clusters.
-source /PATH/TO/ANACONDA/etc/profile.d/conda.sh
-
-# Direct to Freesurfer installation.
-export PATH="/PATH/TO/FREESURFER/fsfast/bin:$PATH"
-export PATH="/PATH/TO/FREESURFER/fsfast/toolbox:$PATH"
-source /PATH/TO/FREESURFER/SetUpFreeSurfer.sh
-
-# Direct to the PSC installation.
-export PATH="/PATH/TO/PSC_PIPELINE/scripts:$PATH"
-export PYTHONPATH="/PATH/TO/PSC_PIPELINE:$PYTHONPATH"
-
-# Direct to the ANTs installation.
-export ANTSPATH="/PATH/TO/ANTS/bin/"
-export PATH="${ANTSPATH}:$PATH"
-
-# Direct to this Python 3 SBCI repository.
-export SBCI_ROOT="/PATH/TO/SBCI_PY3"
-export SBCI_SCRIPTS="${SBCI_ROOT}/scripts"
-export PYTHONPATH="${SBCI_SCRIPTS}:${PYTHONPATH:-}"
-
-# Load the Python environment.
-conda activate sbci
-```
-
-For more Python 3 environment details, see `env_setup/README.md`.
+The `.mat` files above are the pipeline's results. If the separate `sbci` analysis package is
+installed in the image's Python (or its source folder is named in `SBCI_ANALYSIS_PACKAGE`), a
+subject's job also writes that package's `.h5` files and QC page, and
+`workflow/sbci_tool.sbatch` runs its commands as short jobs. Without it both are skipped.

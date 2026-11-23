@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Python 3 port of FreeSurfer 6.0.0's bin/slicedelay.
+
+The stock script is Python 2 (`print "..."`), so it dies with a SyntaxError
+under a Python 3 interpreter, which kills FSFast at the slice-timing step:
+
+    slicedelay --nslices 48 --siemens --o .../sdf.txt --ngroups 1
+    SyntaxError: Missing parentheses in call to 'print'
+
+Behaviour is preserved exactly, including the '%15.13f' output format and the
+integer slices-per-group division (Python 2 `/` on ints -> `//` here).
+"""
+
+import sys
+
+
+def print_usage():
+    print("USAGE: slicedelay --help")
+    print("  --o slicedelayfile")
+    print("  --nslices nslices : total number of slices in the volume")
+    print("  --order order (up,down,odd,even,siemens)")
+    print("  --ngroups ngroups (number of slice groups for SMS)")
+
+
+def print_help():
+    print_usage()
+    print(
+        "\nCreates an FSL custom slice delay file for use with slicetimer (--tcustom=sdfile).\n"
+        "It has a single column of values, one for each slice. Each value is the slice delay\n"
+        "measured as a fraction of the TR and range from +0.5 (beginning of the TR) to \n"
+        "-0.5 (end of the TR). Used for slice-time correction of fMRI.\n"
+    )
+
+
+def argnerr(narg, flag):
+    print("ERROR: flag %s requires %d arguments" % (flag, narg))
+    sys.exit(1)
+
+
+def main(argv):
+    sdf = ""
+    nslices = 0
+    order = ""
+    ngroups = 1
+    debug = 0
+
+    if len(argv) - 1 == 0:
+        print_usage()
+        sys.exit(0)
+
+    args = list(argv)
+    del args[0]
+    while len(args) != 0:
+        flag = args[0]
+        del args[0]
+        if debug:
+            print("flag = %s" % flag)
+        if flag == "--o":
+            if len(args) < 1:
+                argnerr(1, flag)
+            sdf = args[0]
+            del args[0]
+        elif flag == "--nslices":
+            if len(args) < 1:
+                argnerr(1, flag)
+            nslices = int(args[0])
+            del args[0]
+        elif flag == "--order":
+            if len(args) < 1:
+                argnerr(1, flag)
+            order = args[0]
+            del args[0]
+        elif flag == "--ngroups":
+            if len(args) < 1:
+                argnerr(1, flag)
+            ngroups = int(args[0])
+            del args[0]
+        elif flag == "--up":
+            order = "up"
+        elif flag == "--down":
+            order = "down"
+        elif flag == "--odd":
+            order = "odd"
+        elif flag == "--even":
+            order = "even"
+        elif flag == "--siemens":
+            order = "siemens"
+        elif flag == "--help":
+            print_help()
+            sys.exit(1)
+        elif flag == "--debug":
+            debug = 1
+        else:
+            print("ERROR: flag %s not recognized" % flag)
+            sys.exit(1)
+
+    if len(sdf) == 0:
+        print("ERROR: output file needed")
+        sys.exit(1)
+    if nslices == 0:
+        print("ERROR: nslices needed")
+        sys.exit(1)
+    if len(order) == 0:
+        print("ERROR: order needed")
+        sys.exit(1)
+
+    if nslices % ngroups:
+        print("ERROR: cannot divide nslices=%d by ngroups=%d " % (nslices, ngroups))
+        sys.exit(0)
+    nslicespg = nslices // ngroups
+
+    print("sdf %s" % sdf)
+    print("nslices %d" % nslices)
+    print("order %s" % order)
+    print("ngroups %d" % ngroups)
+    print("nslicespg %d" % nslicespg)
+
+    acq_slice_delay = []
+    for sno in range(1, nslicespg + 1):
+        acq_slice_delay.append(((nslicespg - 1.0) / 2.0 - (sno - 1.0)) / nslicespg)
+    print(acq_slice_delay)
+
+    anat_slice_delay = []
+    for sg in range(1, ngroups + 1):
+        print("sg %d" % sg)
+        anat_slice_order = []
+        if order == "up":
+            anat_slice_order = list(range(1, nslicespg + 1, +1))
+        if order == "down":
+            anat_slice_order = list(range(nslicespg, 0, -1))
+        if order == "odd":
+            anat_slice_order = list(range(1, nslicespg + 1, +2)) + list(range(2, nslicespg + 1, +2))
+        if order == "even":
+            anat_slice_order = list(range(2, nslicespg + 1, +2)) + list(range(1, nslicespg + 1, +2))
+        if order == "siemens":
+            if nslicespg % 2 == 1:  # siemens-odd
+                anat_slice_order = list(range(1, nslicespg + 1, +2)) + list(range(2, nslicespg + 1, +2))
+            else:  # siemens-even
+                anat_slice_order = list(range(2, nslicespg + 1, +2)) + list(range(1, nslicespg + 1, +2))
+        if len(anat_slice_order) == 0:
+            print("ERROR: slice order %s not recognized " % order)
+            sys.exit(0)
+
+        acq_order = sorted(range(len(anat_slice_order)), key=lambda x: anat_slice_order[x])
+        for s in acq_order:
+            anat_slice_delay.append(acq_slice_delay[s])
+
+    with open(sdf, "w") as handle:
+        for d in anat_slice_delay:
+            handle.write("%15.13f\n" % d)
+
+    sys.exit(0)
+
+
+if __name__ == "__main__":
+    main(sys.argv)

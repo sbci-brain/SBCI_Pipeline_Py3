@@ -183,6 +183,48 @@ class ShippedSkillTests(unittest.TestCase):
             self.assertEqual(2, missing.returncode)
             self.assertIn("get_image.sbatch", missing.stderr)
 
+    @unittest.skipUnless(shutil.which("bash") and sys.platform.startswith("linux"), "needs bash on Linux")
+    def test_jobs_rerun_in_docker_without_apptainer(self) -> None:
+        """SBCI_CONTAINER=docker: the job runs again in the pinned image, as this user, with the same folders."""
+        with tempfile.TemporaryDirectory() as name:
+            temp = Path(name).resolve()
+            fake = temp / "bin" / "docker"
+            fake.parent.mkdir(parents=True)
+            # `docker image inspect` succeeds; `docker run` prints its arguments.
+            fake.write_text('#!/bin/sh\n[ "$1" = image ] && exit 0\nprintf "%s\\n" "$@"\n', encoding="utf-8")
+            fake.chmod(0o755)
+            licence, inp, out = temp / "license.txt", temp / "in", temp / "out"
+            licence.write_text("x", encoding="utf-8")
+            (inp / "sub-01").mkdir(parents=True)
+            out.mkdir()
+            (inp / "sbci_local.json").write_text(json.dumps({"workflow": {"freesurfer_license": str(licence)}}))
+            env = {k: v for k, v in os.environ.items()
+                   if k not in ("SBCI_IMAGE", "SBCI_PIPELINE", "SBCI_IMAGE_ENV", "SBCI_DOCKER_IMAGE", "SBCI_FULL_IMAGE")}
+            env.update(PATH=f"{fake.parent}:{env['PATH']}", SBCI_CONTAINER="docker", SBCI_READONLY_ROOTS="/nowhere")
+            done = subprocess.run([shutil.which("bash"), (ROOT / "workflow" / "run_subject.sbatch").as_posix(),
+                                   "--inspect", str(inp), str(out)], env=env, capture_output=True, text=True)
+            self.assertEqual(0, done.returncode, done.stderr)
+            args = done.stdout.splitlines()
+            pin = dict(line.split("=", 1) for line in (ROOT / "workflow" / "image_pin.sh").read_text().splitlines()
+                       if "=" in line and not line.startswith("#"))
+            image = f"{pin['REPOSITORY']}@{pin['DIGEST']}"
+            self.assertEqual([image, "bash", f"{ROOT.as_posix()}/workflow/run_subject.sbatch", "--inspect", str(inp), str(out)],
+                             args[-6:])
+            mounts = {args[i + 1] for i, arg in enumerate(args) if arg == "-v"}
+            self.assertLessEqual({f"{p}:{p}" for p in (ROOT.resolve(), inp, inp / "sub-01", out, licence)}, mounts)
+            self.assertIn(f"{os.getuid()}:{os.getgid()}", args)
+            self.assertIn(f"SBCI_PIPELINE={ROOT.as_posix()}", args)
+            self.assertIn("SBCI_READONLY_ROOTS", args)
+
+    def test_one_pin_serves_both_routes(self) -> None:
+        """get_image.sbatch and the Docker route read the image's digest from image_pin.sh only."""
+        pin = (ROOT / "workflow" / "image_pin.sh").read_text(encoding="utf-8")
+        self.assertRegex(pin, r"(?m)^DIGEST=sha256:[0-9a-f]{64}$")
+        for script in ("get_image.sbatch", "runtime_env.sh"):
+            text = (ROOT / "workflow" / script).read_text(encoding="utf-8")
+            self.assertIn("workflow/image_pin.sh", text)
+            self.assertNotRegex(text, r"sha256:[0-9a-f]{64}")
+
     def test_runtime_probe_finds_the_assets(self) -> None:
         """The reference surfaces and ico4 grid sit in data/ (a preflight once raised after they moved)."""
         probe = local_pipeline.runtime_probe(ROOT)

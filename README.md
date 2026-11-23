@@ -24,8 +24,8 @@ Adult has run end to end on this layout; the numbers are in each dataset's `vali
 
 ## One subject in three commands
 
-On Linux (or WSL) with Apptainer and MATLAB on `PATH` (on a cluster, load both before
-submitting, e.g. `module load apptainer matlab`):
+On Linux (or WSL) with Apptainer or Docker, and MATLAB on `PATH` (on a cluster, load both
+before submitting, e.g. `module load apptainer matlab`):
 
 ```bash
 git clone https://github.com/sbci-brain/SBCI_Pipeline_Py3.git && cd SBCI_Pipeline_Py3
@@ -50,11 +50,36 @@ stage.
 
 | | |
 |---|---|
-| **Linux (or WSL) with Apptainer** | Every stage runs inside the image. |
-| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261123` from Docker Hub, pinned by digest, to `sbci-full.sif` in this folder: about 11 GB to download, then 2–3 hours packing on 4 cores, and room for about three times that while it builds. It needs internet, so on a cluster run it where there is some. Set `SBCI_FULL_IMAGE` to use a copy elsewhere. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
+| **Apptainer or Docker** | Every stage runs inside the image. Apptainer is used where it is on `PATH` (clusters); otherwise Docker ([below](#apptainer-or-docker)). |
+| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261123` from Docker Hub, pinned by digest (`workflow/image_pin.sh`). It needs internet, so on a cluster run it where there is some. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
 | **MATLAB** (R2018b validated, a Linux install) on `PATH` | For the FSFast stage (`selxavg3-sess`); the job binds it into the image. It is not optional: the SBCI stage runs only after every preprocessing stage, so without MATLAB no subject finishes, SC included. FreeSurfer 6's compiled `selxavg3` does not replace it (it needs MATLAB Runtime R2014a; FreeSurfer 6 ships R2012b). |
 | **A FreeSurfer licence file** | Free from FreeSurfer's site; the image has none. Its path goes in `sbci_local.json`. |
 | **16 CPUs, 64 GB of memory, about 30 GB of disk per subject** | What `run_subject.sbatch` asks Slurm for, and what the validation runs used. |
+
+### Apptainer or Docker
+
+The same three commands serve both. The job scripts use Apptainer where it is on `PATH` and
+Docker otherwise; `SBCI_CONTAINER=docker` or `SBCI_CONTAINER=apptainer` chooses.
+
+| | Apptainer | Docker |
+|---|---|---|
+| Where | clusters, Linux, WSL | a Linux machine or WSL with Docker; no Slurm needed |
+| `get_image.sbatch` | builds `sbci-full.sif` in this folder: 11 GB to download, then 2–3 hours packing on 4 cores, and room for about three times that while it builds | `docker pull` by digest: 11 GB to download, about 40 GB unpacked |
+| Another image | `SBCI_FULL_IMAGE=/path/to/a.sif` | `SBCI_DOCKER_IMAGE=name@digest` |
+| A job | `apptainer exec` with the run's folders bound | `docker run` as your user, with the run's folders mounted at their own paths |
+
+Where there is no Slurm, `submit.sh` runs the job on the machine itself, in the background,
+with its log at `--output`. Give Docker at least 16 CPUs and 64 GB where it has limits of its
+own.
+
+The Docker route has been run on WSL: fetching the image, and the preflight of a test
+subject. A whole subject has not been run through it yet; the validation runs used Apptainer.
+
+MATLAB must be a Linux install on the machine that runs the job, because it runs inside the
+container. That rules out finishing a subject on macOS: the scripts no longer stop there,
+and Docker Desktop can run the image, but a macOS MATLAB cannot be used by the `fsfast`
+stage, and on Apple silicon the image runs under emulation. macOS is untested. Use a Linux
+machine, a cluster or WSL for real runs.
 
 ## Input
 
@@ -214,8 +239,8 @@ variables, which the image sets:
 | `SBCI_IMAGE` | the image's release name |
 
 The image holds the tools only, and no copy of the pipeline: the code that runs is this
-clone's. The job scripts bind the clone's folder into the container and name it in
-`SBCI_PIPELINE`, so there is one set of scripts, and a code change needs no new image.
+clone's. The job scripts bind the clone's folder into the container (Apptainer or Docker) and
+name it in `SBCI_PIPELINE`, so there is one set of scripts, and a code change needs no new image.
 `get_image.sbatch` ends by checking that the image sets these variables and has the tools on
 `PATH`.
 
@@ -223,8 +248,10 @@ clone's. The job scripts bind the clone's folder into the container and name it 
 
 | Message | What to do |
 |---|---|
-| `the SBCI pipeline runs on Linux (or WSL) …`, or `readlink: illegal option -- m` from an earlier copy | The machine is not Linux (macOS, for example). Run the three commands on a Linux machine, a cluster login node, or in WSL. |
-| `apptainer is not on PATH` | Load or install Apptainer (`module load apptainer` on a cluster). |
+| `needs Apptainer or Docker on PATH` | Install or load one (`module load apptainer` on a cluster). |
+| `Docker has no image …` | Run `bash workflow/get_image.sbatch` once; with Docker it pulls the pinned image. |
+| `readlink: illegal option -- m` | An earlier copy of the scripts on macOS; update the clone (`git pull`). |
+| `this machine is Darwin: FSFast … needs a Linux MATLAB` | Expected on macOS: see [Apptainer or Docker](#apptainer-or-docker). |
 | `no sbci-full image at …` | Run `bash workflow/get_image.sbatch` once, or set `SBCI_FULL_IMAGE` to a copy. |
 | `WARNING: no matlab on PATH` | Put MATLAB on `PATH` before submitting (`module load matlab`); the preflight lists `matlab` as missing for `fsfast`. |
 | `cannot find the pipeline folder` | Start the job with `workflow/submit.sh`, not with `sbatch` directly: Slurm runs a copy of the script from its spool folder. |
@@ -238,7 +265,7 @@ clone's. The job scripts bind the clone's folder into the container and name it 
 | Folder | Content |
 |---|---|
 | `run_pipeline.py` | the entry point: inspects a subject or runs its next stage |
-| `workflow/` | the driver: planning, resume, preflight, the job scripts (`run_subject.sbatch`, `submit.sh`, `get_image.sbatch`, `sbci_tool.sbatch`), the configuration schema |
+| `workflow/` | the driver: planning, resume, preflight, the job scripts (`run_subject.sbatch`, `submit.sh`, `get_image.sbatch`, `sbci_tool.sbatch`), the image pin (`image_pin.sh`), the configuration schema |
 | `corrections/` | the raw-input routes: Synb0, topup, eddy, FUGUE |
 | `preprocessing/` | registration, FreeSurfer, fODF and fMRI stages, driven by the profile |
 | `pipeline/` | the SBCI stage: grid, SET tractography, snapping, SC, FC |

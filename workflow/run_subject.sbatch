@@ -9,7 +9,8 @@
 # both Python environments). The one thing taken from this machine is MATLAB (R2018b
 # validated), which FSFast, the fMRI stage, runs: have `matlab` on PATH (on a cluster, e.g.
 # `module load apptainer matlab` before submitting; Slurm passes PATH on to the job).
-# Needs Linux (or WSL) with Apptainer and the image (workflow/get_image.sbatch, once).
+# Needs Apptainer (clusters, Linux, WSL) or Docker, and the image (workflow/get_image.sbatch,
+# once). Apptainer is used where it is on PATH; SBCI_CONTAINER=docker or =apptainer chooses.
 # Start it with submit.sh (sbatch where there is Slurm, a background job elsewhere):
 #
 #   bash <pipeline>/workflow/submit.sh --output=<OUTPUT_DIR>/slurm-%j.out \
@@ -26,16 +27,22 @@
 #
 #   bash <pipeline>/workflow/run_subject.sbatch --inspect <INPUT_DIR> <OUTPUT_DIR>
 set -uo pipefail
-# Every job runs in a Linux container: on macOS or plain Windows there is no Apptainer (use a
-# Linux machine, a cluster, or WSL).
-[ "$(uname -s)" = Linux ] || { echo "ERROR: the SBCI pipeline runs on Linux (or WSL) with Apptainer; this machine is $(uname -s)." >&2; exit 2; }
+# `readlink -m` for any machine (macOS has no -m): the real path of the nearest folder that
+# exists, plus the rest of the path.
+real_path() {
+    local p=$1 rest="" d
+    case $p in /*) ;; *) p=$PWD/$p ;; esac
+    while [ ! -d "$p" ]; do rest=/$(basename "$p")$rest; p=$(dirname "$p"); done
+    d=$(cd "$p" && pwd -P)
+    echo "${d%/}$rest"
+}
 
 INSPECT=""
 [ "${1:-}" = "--inspect" ] && { INSPECT=1; shift; }
 usage="usage: run_subject.sbatch [--inspect] INPUT_DIR OUTPUT_DIR"
 for path in "${1:?$usage}" "${2:?$usage}"; do
     # -m, not -f: -f prints nothing for a path with missing parents, skipping the check.
-    real=$(readlink -m "$path")
+    real=$(real_path "$path")
     IFS=: read -ra protected <<< "${SBCI_READONLY_ROOTS:-}"
     for root in ${protected[@]+"${protected[@]}"}; do
         [ -n "$root" ] || continue
@@ -44,8 +51,8 @@ for path in "${1:?$usage}" "${2:?$usage}"; do
         esac
     done
 done
-IN=$(readlink -f "$1")
-OUT=$(readlink -f "$2")
+IN=$(real_path "$1")
+OUT=$(real_path "$2")
 [ -s "$IN/sbci_local.json" ] || { echo "ERROR: $IN/sbci_local.json is missing." >&2; exit 2; }
 [ -d "$OUT" ] || { echo "ERROR: output folder $OUT does not exist." >&2; exit 2; }
 

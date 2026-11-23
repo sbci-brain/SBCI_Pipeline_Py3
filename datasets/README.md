@@ -5,10 +5,10 @@ settings below), the input layout it expects, and the record of its validation.
 
 | Dataset | Folder | Input route | Profiles | Validated on | Status |
 |---|---|---|---|---|---|
-| ADNI | [`adni/`](adni/) | `raw` | `profile.conf` | 2026.11.22 | validated |
-| ABCD | [`abcd/`](abcd/) | `corrected` | `profile.conf`, `profile.historical.conf` | 2026.11.22 | validated |
-| HCP Aging / Development | [`hcp-lifespan/`](hcp-lifespan/) | `corrected` | `profile.conf`, `profile.historical.conf` | 2026.11.22 | validated |
-| HCP Young Adult | [`hcp-ya/`](hcp-ya/) | `corrected_dwi_raw_bold` | `profile.conf` | 2026.11.22 | validated |
+| ADNI | [`adni/`](adni/) | `raw` | `profile.conf` | 20261122 | validated |
+| ABCD | [`abcd/`](abcd/) | `corrected` | `profile.conf`, `profile.historical.conf` | 20261122 | validated |
+| HCP Aging / Development | [`hcp-lifespan/`](hcp-lifespan/) | `corrected` | `profile.conf`, `profile.historical.conf` | 20261122 | validated |
+| HCP Young Adult | [`hcp-ya/`](hcp-ya/) | `corrected_dwi_raw_bold` | `profile.conf` | 20261122 | validated |
 
 "Validated on" names the release a subject of that dataset last ran on end to end, with the
 numbers in the folder's `validation.md`. A dataset marked untested has no such run on this

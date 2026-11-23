@@ -11,8 +11,12 @@
 #   bash <pipeline>/workflow/get_image.sbatch [IMAGE.sif]
 # Pinned by digest, so every clone of this release runs on the same image.
 set -euo pipefail
-REPOSITORY=sdszhauk/sbci-full
-TAG=2026.11.22
+# Every job runs in a Linux container: on macOS or plain Windows there is no Apptainer (use a
+# Linux machine, a cluster, or WSL).
+[ "$(uname -s)" = Linux ] || { echo "ERROR: the SBCI pipeline runs on Linux (or WSL) with Apptainer; this machine is $(uname -s)." >&2; exit 2; }
+command -v apptainer > /dev/null || { echo "ERROR: apptainer is not on PATH (on a cluster: module load apptainer)." >&2; exit 2; }
+REPOSITORY=sdszhauk/sbci-image
+TAG=20261122
 DIGEST=sha256:ff1b4c8f719d6bb6f8afb56a9aaa7b032755d017d9e38268c8a5be5b52b98ed9
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PIPELINE=${SBCI_PIPELINE:-$here}

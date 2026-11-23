@@ -18,7 +18,7 @@ pipeline's, moved to Python 3 and scilpy 2.x; around them is a workflow that pla
 stages, checks each one's outputs, resumes after an interruption and runs everything in the
 `sbci-full` image.
 
-**Status: release 2026.11.22.** One subject each of ADNI, ABCD, HCP Aging and HCP Young
+**Status: release 20261122.** One subject each of ADNI, ABCD, HCP Aging and HCP Young
 Adult has run end to end on this layout; the numbers are in each dataset's `validation.md`
 ([Datasets](#datasets)).
 
@@ -51,7 +51,7 @@ stage.
 | | |
 |---|---|
 | **Linux (or WSL) with Apptainer** | Every stage runs inside the image. |
-| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-full:2026.11.22` from Docker Hub, pinned by digest, to `sbci-full.sif` in this folder: about 11 GB to download, then 2–3 hours packing on 4 cores, and room for about three times that while it builds. It needs internet, so on a cluster run it where there is some. Set `SBCI_FULL_IMAGE` to use a copy elsewhere. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
+| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261122` from Docker Hub, pinned by digest, to `sbci-full.sif` in this folder: about 11 GB to download, then 2–3 hours packing on 4 cores, and room for about three times that while it builds. It needs internet, so on a cluster run it where there is some. Set `SBCI_FULL_IMAGE` to use a copy elsewhere. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
 | **MATLAB** (R2018b validated, a Linux install) on `PATH` | For the FSFast stage (`selxavg3-sess`); the job binds it into the image. It is not optional: the SBCI stage runs only after every preprocessing stage, so without MATLAB no subject finishes, SC included. FreeSurfer 6's compiled `selxavg3` does not replace it (it needs MATLAB Runtime R2014a; FreeSurfer 6 ships R2012b). |
 | **A FreeSurfer licence file** | Free from FreeSurfer's site; the image has none. Its path goes in `sbci_local.json`. |
 | **16 CPUs, 64 GB of memory, about 30 GB of disk per subject** | What `run_subject.sbatch` asks Slurm for, and what the validation runs used. |
@@ -172,10 +172,10 @@ The datasets differ in settings, not in code: every dataset runs the same stage 
 
 | Dataset | Folder | Route | Profiles | Validated on |
 |---|---|---|---|---|
-| ADNI | [`datasets/adni/`](datasets/adni/) | `raw` | `profile.conf` | 2026.11.22 |
-| ABCD | [`datasets/abcd/`](datasets/abcd/) | `corrected` | `profile.conf`, `profile.historical.conf` | 2026.11.22 |
-| HCP Aging / Development | [`datasets/hcp-lifespan/`](datasets/hcp-lifespan/) | `corrected` | `profile.conf`, `profile.historical.conf` | 2026.11.22 |
-| HCP Young Adult | [`datasets/hcp-ya/`](datasets/hcp-ya/) | `corrected_dwi_raw_bold` | `profile.conf` | 2026.11.22 |
+| ADNI | [`datasets/adni/`](datasets/adni/) | `raw` | `profile.conf` | 20261122 |
+| ABCD | [`datasets/abcd/`](datasets/abcd/) | `corrected` | `profile.conf`, `profile.historical.conf` | 20261122 |
+| HCP Aging / Development | [`datasets/hcp-lifespan/`](datasets/hcp-lifespan/) | `corrected` | `profile.conf`, `profile.historical.conf` | 20261122 |
+| HCP Young Adult | [`datasets/hcp-ya/`](datasets/hcp-ya/) | `corrected_dwi_raw_bold` | `profile.conf` | 20261122 |
 
 A profile is a file of `NAME=value` lines: which b-value shells reach the tensor fit and the
 fODF, the fODF model and order, the fMRI timing, and the tractography settings (in the
@@ -223,6 +223,8 @@ and has the tools on `PATH`.
 
 | Message | What to do |
 |---|---|
+| `the SBCI pipeline runs on Linux (or WSL) …`, or `readlink: illegal option -- m` from an earlier copy | The machine is not Linux (macOS, for example). Run the three commands on a Linux machine, a cluster login node, or in WSL. |
+| `apptainer is not on PATH` | Load or install Apptainer (`module load apptainer` on a cluster). |
 | `no sbci-full image at …` | Run `bash workflow/get_image.sbatch` once, or set `SBCI_FULL_IMAGE` to a copy. |
 | `WARNING: no matlab on PATH` | Put MATLAB on `PATH` before submitting (`module load matlab`); the preflight lists `matlab` as missing for `fsfast`. |
 | `cannot find the pipeline folder` | Start the job with `workflow/submit.sh`, not with `sbatch` directly: Slurm runs a copy of the script from its spool folder. |

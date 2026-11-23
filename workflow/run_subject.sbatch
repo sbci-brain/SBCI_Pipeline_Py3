@@ -26,6 +26,9 @@
 #
 #   bash <pipeline>/workflow/run_subject.sbatch --inspect <INPUT_DIR> <OUTPUT_DIR>
 set -uo pipefail
+# Every job runs in a Linux container: on macOS or plain Windows there is no Apptainer (use a
+# Linux machine, a cluster, or WSL).
+[ "$(uname -s)" = Linux ] || { echo "ERROR: the SBCI pipeline runs on Linux (or WSL) with Apptainer; this machine is $(uname -s)." >&2; exit 2; }
 
 INSPECT=""
 [ "${1:-}" = "--inspect" ] && { INSPECT=1; shift; }

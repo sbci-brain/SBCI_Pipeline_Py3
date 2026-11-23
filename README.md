@@ -53,7 +53,7 @@ stage.
 | **Apptainer or Docker** | Every stage runs inside the image. Apptainer is used where it is on `PATH` (clusters); otherwise Docker ([below](#apptainer-or-docker)). |
 | **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261123` from Docker Hub, pinned by digest (`workflow/image_pin.sh`). It needs internet, so on a cluster run it where there is some. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
 | **MATLAB** (R2018b validated, a Linux install) on `PATH` | For the FSFast stage (`selxavg3-sess`); the job binds it into the image. It is not optional: the SBCI stage runs only after every preprocessing stage, so without MATLAB no subject finishes, SC included. FreeSurfer 6's compiled `selxavg3` does not replace it (it needs MATLAB Runtime R2014a; FreeSurfer 6 ships R2012b). |
-| **A FreeSurfer licence file** | Free from FreeSurfer's site; the image has none. Its path goes in `sbci_local.json`. |
+| **A FreeSurfer licence file** | Free from FreeSurfer's site (https://surfer.nmr.mgh.harvard.edu/registration.html); the image has none. Its path goes in `sbci_local.json`. |
 | **16 CPUs, 64 GB of memory, about 30 GB of disk per subject** | What `run_subject.sbatch` asks Slurm for, and what the validation runs used. |
 
 ### Apptainer or Docker

@@ -16,8 +16,8 @@ set -euo pipefail
 [ "$(uname -s)" = Linux ] || { echo "ERROR: the SBCI pipeline runs on Linux (or WSL) with Apptainer; this machine is $(uname -s)." >&2; exit 2; }
 command -v apptainer > /dev/null || { echo "ERROR: apptainer is not on PATH (on a cluster: module load apptainer)." >&2; exit 2; }
 REPOSITORY=sdszhauk/sbci-image
-TAG=20261122
-DIGEST=sha256:ff1b4c8f719d6bb6f8afb56a9aaa7b032755d017d9e38268c8a5be5b52b98ed9
+TAG=20261123
+DIGEST=sha256:d5b6f2c64867238e0704cd408ad876460aeafe8610860391cc86c9d661feeb0a
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 PIPELINE=${SBCI_PIPELINE:-$here}
 DEST=$(readlink -m "${1:-$PIPELINE/sbci-full.sif}")

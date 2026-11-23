@@ -18,7 +18,7 @@ pipeline's, moved to Python 3 and scilpy 2.x; around them is a workflow that pla
 stages, checks each one's outputs, resumes after an interruption and runs everything in the
 `sbci-full` image.
 
-**Status: release 20261122.** One subject each of ADNI, ABCD, HCP Aging and HCP Young
+**Status: release 20261123.** One subject each of ADNI, ABCD, HCP Aging and HCP Young
 Adult has run end to end on this layout; the numbers are in each dataset's `validation.md`
 ([Datasets](#datasets)).
 
@@ -51,7 +51,7 @@ stage.
 | | |
 |---|---|
 | **Linux (or WSL) with Apptainer** | Every stage runs inside the image. |
-| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261122` from Docker Hub, pinned by digest, to `sbci-full.sif` in this folder: about 11 GB to download, then 2–3 hours packing on 4 cores, and room for about three times that while it builds. It needs internet, so on a cluster run it where there is some. Set `SBCI_FULL_IMAGE` to use a copy elsewhere. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
+| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261123` from Docker Hub, pinned by digest, to `sbci-full.sif` in this folder: about 11 GB to download, then 2–3 hours packing on 4 cores, and room for about three times that while it builds. It needs internet, so on a cluster run it where there is some. Set `SBCI_FULL_IMAGE` to use a copy elsewhere. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
 | **MATLAB** (R2018b validated, a Linux install) on `PATH` | For the FSFast stage (`selxavg3-sess`); the job binds it into the image. It is not optional: the SBCI stage runs only after every preprocessing stage, so without MATLAB no subject finishes, SC included. FreeSurfer 6's compiled `selxavg3` does not replace it (it needs MATLAB Runtime R2014a; FreeSurfer 6 ships R2012b). |
 | **A FreeSurfer licence file** | Free from FreeSurfer's site; the image has none. Its path goes in `sbci_local.json`. |
 | **16 CPUs, 64 GB of memory, about 30 GB of disk per subject** | What `run_subject.sbatch` asks Slurm for, and what the validation runs used. |
@@ -211,13 +211,13 @@ variables, which the image sets:
 | `SBCI_ENV` | the preprocessing Python environment (scilpy 2.3.0) |
 | `SBCI_CORE_PY` | the Python that runs the SBCI stage |
 | `SBCI_TEMPLATE_DIR` | the MNI 152 symmetric 2009c template used for brain extraction |
-| `SBCI_PIPELINE` | a copy of this repository at the release the image was built for |
-| `SBCI_IMAGE` | the release tag and pipeline commit |
+| `SBCI_IMAGE` | the image's release name |
 
-The image carries a copy of the pipeline so that it runs on its own; a clone of this
-repository runs its own code with the image's tools (the job scripts pass the clone's folder
-as `SBCI_PIPELINE`). `get_image.sbatch` ends by checking that the image sets these variables
-and has the tools on `PATH`.
+The image holds the tools only, and no copy of the pipeline: the code that runs is this
+clone's. The job scripts bind the clone's folder into the container and name it in
+`SBCI_PIPELINE`, so there is one set of scripts, and a code change needs no new image.
+`get_image.sbatch` ends by checking that the image sets these variables and has the tools on
+`PATH`.
 
 ## When something stops
 

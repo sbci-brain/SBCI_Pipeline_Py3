@@ -267,14 +267,6 @@ The tests need no image and no subject data: they run the planner, the stage scr
 job scripts against fixtures and stand-in tools. Tests that need VTK, nibabel or POSIX
 permissions skip where those are absent.
 
-## Optional: the `sbci` analysis package
-
-The `.mat` files above are the pipeline's results. If the separate `sbci` analysis package is
-installed in the image's Python (or its source folder is named in `SBCI_ANALYSIS_PACKAGE`), a
-subject's job also writes that package's `.h5` files to `OUT/derivatives` and a QC page to
-`OUT/qc`, and `workflow/sbci_tool.sbatch` runs its commands as short jobs. Without it both
-are skipped.
-
 ## References
 
 - **SBCI** — Cole, M., Murray, K., St-Onge, E., Risk, B., Zhong, J., Schifitto, G.,

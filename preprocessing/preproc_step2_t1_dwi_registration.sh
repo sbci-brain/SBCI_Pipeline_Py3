@@ -55,7 +55,9 @@ mkdir -p bet/
 # Which shells reach DTI and fODF is an explicit choice, SHELL_POLICY in sbci_config:
 #   nearest_1000  DTI and fODF both use the non-zero shell nearest b=1000. The ADNI
 #                 choice: its protocols are mixed, (0,1000), (0,500,1000,2000), (0,2000)...
-#   explicit      DTI_BVALS / FODF_BVALS from the config, as written
+#   explicit      DTI_BVALS / FODF_BVALS from the config, as written. Under the other two
+#                 policies those lines select nothing: they say which shells the profile
+#                 expects, and the preflight warns when the data give others.
 #   all           fODF gets every non-zero shell (multi-shell models); DTI keeps the
 #                 shell nearest b=1000, because the tensor model does not hold at high b
 # Single-shell data needs no policy. Multi-shell data without one stops here: keeping
@@ -81,12 +83,14 @@ if [ -z "${SHELL_POLICY:-}" ]; then
     SHELL_POLICY=nearest_1000
 fi
 
+# The shell nearest b=1000. NONZERO_SHELLS ascends, so of two equally near shells (500 and
+# 1500) the higher is kept: the tensor fit is the better for it.
 _BEST_SHELL=""
 _BEST_DIST=999999
 for _s in $NONZERO_SHELLS; do
     _d=$(( _s - 1000 ))
     _d=${_d#-}
-    if [ "$_d" -lt "$_BEST_DIST" ]; then
+    if [ "$_d" -le "$_BEST_DIST" ]; then
         _BEST_DIST=$_d
         _BEST_SHELL=$_s
     fi
@@ -98,10 +102,13 @@ done
 # scilpy behind the lab's historical outputs kept < tolerance, so at 20 it dropped HCP's
 # b=2980 volumes and 2.x keeps them. The historical profiles set 19 to reproduce that.
 FODF_TOLERANCE=${FODF_TOLERANCE:-20}
+# The tensor extraction: 20 as always, and under `all` the same +-50 window, so that the
+# tensor fit gets every volume of its shell (no listed dataset has one beyond 20).
+DTI_TOLERANCE=20
 case "$SHELL_POLICY" in
     nearest_1000) DTI_BVALS=(0 $_BEST_SHELL); FODF_BVALS=(0 $_BEST_SHELL) ;;
     explicit)     ;;
-    all)          DTI_BVALS=(0 $_BEST_SHELL); FODF_BVALS=(0 $NONZERO_SHELLS); FODF_TOLERANCE=50 ;;
+    all)          DTI_BVALS=(0 $_BEST_SHELL); FODF_BVALS=(0 $NONZERO_SHELLS); FODF_TOLERANCE=50; DTI_TOLERANCE=50 ;;
     *)
         echo "ERROR: SHELL_POLICY=${SHELL_POLICY} is not one of nearest_1000, all, explicit."
         exit 1
@@ -110,6 +117,15 @@ esac
 
 echo "Detected shells: $(echo $DETECTED_SHELLS)"
 echo "SHELL_POLICY=${SHELL_POLICY}: DTI_BVALS=${DTI_BVALS[*]}, FODF_BVALS=${FODF_BVALS[*]}"
+
+# The tensor model fits well for b of about 700-1500. Outside it the run continues, with a
+# warning: the FA of this fit drives the T1-to-DWI registration below.
+for _s in "${DTI_BVALS[@]}"; do
+    _s=$(awk -v b="$_s" 'BEGIN {printf "%d", int(b/100+0.5)*100}')
+    if [ "$_s" -gt 0 ] && { [ "$_s" -lt 700 ] || [ "$_s" -gt 1500 ]; }; then
+        echo "WARNING: the tensor fit uses b = ${_s}, outside b = 700-1500 where the tensor model fits well; check the T1-to-DWI registration."
+    fi
+done
 
 #####################################
 ######## dMRI preprocessing #########
@@ -223,7 +239,7 @@ scil_volume_crop structure/t1_bet_mask.nii.gz structure/t1_bet_mask_cropped.nii.
 # extract data for dti
 scil_dwi_extract_shell diffusion/dwi_resampled.nii.gz \
         diffusion/flip_x.bval diffusion/flip_x.bvec ${DTI_BVALS[*]} diffusion/dwi_dti.nii.gz \
-        diffusion/dti.bval diffusion/dti.bvec --tolerance 20 -f
+        diffusion/dti.bval diffusion/dti.bvec --tolerance ${DTI_TOLERANCE} -f
 
 # extract data for fodf
 scil_dwi_extract_shell diffusion/dwi_resampled.nii.gz \

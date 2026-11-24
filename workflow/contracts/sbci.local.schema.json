@@ -55,7 +55,7 @@
         "rng": {"type": "integer", "minimum": 0, "maximum": 2147483647},
         "bandwidth": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
         "resolution": {"const": "ico4"},
-        "sh_order": {"type": "integer", "minimum": 2, "maximum": 16, "multipleOf": 2, "description": "fODF spherical-harmonic order for the fodf_tissue stage. Optional; when absent SH_ORDER from workflow.preprocessing_config applies (default 6). Setting both to different values blocks the stage. The stage also blocks when the data have fewer than (L+1)(L+2)/2 unique directions."},
+        "sh_order": {"type": "integer", "minimum": 2, "maximum": 16, "multipleOf": 2, "description": "fODF spherical-harmonic order for the fodf_tissue stage. Optional; when absent SH_ORDER from workflow.preprocessing_config applies (default 6 for one shell, 8 for several). Setting both to different values blocks the stage. The stage also blocks when the data have fewer than (L+1)(L+2)/2 unique directions."},
         "rois": {
           "type": "array",
           "minItems": 1,

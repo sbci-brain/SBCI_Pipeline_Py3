@@ -26,6 +26,7 @@ from workflow.workflow_executor import (
     available_cpus,
     execute_workflow_stage_safely,
     profile_mismatches,
+    profile_warnings,
     profile_path,
     template_problem,
 )
@@ -1100,6 +1101,11 @@ def main(argv: list[str] | None = None) -> int:
                 workflow["plan"]["blockers"].append({"stage": "input", "message": message, "code": "profile_mismatch"})
                 workflow["plan"]["readyToRun"] = False
                 issues.append(issue("profile_mismatch", message, config_path))
+            # Shown by the preflight and in the job log; a warning never stops a run.
+            workflow["plan"]["warnings"] = [
+                {"code": "profile_warning", "message": message}
+                for message in profile_warnings(workflow_config, inventory)
+            ]
             registration = next((row for row in workflow["plan"]["stages"] if row["id"] == "t1_dwi_registration"), None)
             message = template_problem() if registration and registration.get("state") != "complete" else None
             if message:

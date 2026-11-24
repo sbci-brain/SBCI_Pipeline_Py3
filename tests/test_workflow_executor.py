@@ -823,6 +823,78 @@ class WorkflowExecutorTests(unittest.TestCase):
                                  completed.stdout + completed.stderr)
 
     @unittest.skipUnless(BASH, "bash is required to run the shipped stage scripts")
+    def test_tensor_shell_is_nearest_1000_and_warns_outside_700_to_1500(self) -> None:
+        """The script and the preflight pick the same tensor shell (of two equally near 1000,
+        the higher), for each listed dataset as before, and warn only outside b = 700-1500."""
+        from workflow.workflow_executor import dwi_shells, nearest_1000, shell_warnings
+        for bvals, tensor, warns in (
+            ("0 1000 1000", 1000, False),                 # ADNI single shell
+            ("0 500 1000 2000", 1000, False),             # ADNI multi-shell
+            ("0 500 1000 2000 3000", 1000, False),        # ABCD
+            ("5 1485 1510 2980 3010", 1500, False),       # HCP Aging / Development
+            ("5 990 1005 1995 2005 2990 3010", 1000, False),  # HCP-YA
+            ("0 2000 1995", 2000, True),                  # ADNI b=2000 only
+            ("0 500 1500", 1500, False),                  # equally near: the higher
+            ("0 600 1500", 600, True),
+            ("0 700 2000", 700, False),
+            ("0 300 3000", 300, True),
+        ):
+            with self.subTest(bvals=bvals), tempfile.TemporaryDirectory() as temp:
+                pipeline = self._registration_tree(Path(temp), bvals)
+                completed, calls = run_shipped_stage(
+                    "preproc_step2_t1_dwi_registration.sh", "t1_dwi_registration", pipeline,
+                    config_without("SHELL_POLICY", "DTI_BVALS", "FODF_BVALS") + "SHELL_POLICY=all\n",
+                )
+                output = completed.stdout + completed.stderr
+                self.assertEqual(f"0 {tensor}", self._extract_shell_args(calls)["dti"], output)
+                self.assertEqual(warns, f"WARNING: the tensor fit uses b = {tensor}," in completed.stdout, output)
+                bval = pipeline / "diffusion" / "flip_x.bval"
+                self.assertEqual(tensor, nearest_1000(dwi_shells(bval)))
+                start = f"The tensor fit uses b = {tensor}, outside"
+                found = shell_warnings(bval, pipeline.parent / "sbci_config")
+                self.assertEqual([start] if warns else [], [message[:len(start)] for message in found])
+
+    def test_preflight_warns_when_the_data_are_not_the_shells_a_profile_lists(self) -> None:
+        """DTI_BVALS / FODF_BVALS select nothing under nearest_1000 and all; they say what the
+        profile expects. Each listed dataset's own shells give no warning."""
+        from workflow.workflow_executor import shell_warnings
+        own = {
+            "adni/profile.conf": ("0 1000 1000", "0 500 1000 2000"),
+            "abcd/profile.conf": ("0 500 1000 2000 3000",),
+            "abcd/profile.historical.conf": ("0 500 1000 2000 3000",),
+            "hcp-lifespan/profile.conf": ("5 1485 1510 2980 3010",),
+            "hcp-lifespan/profile.historical.conf": ("5 1485 1510 2980 3010",),
+            "hcp-ya/profile.conf": ("5 990 1005 1995 2005 2990 3010",),
+            "generic/profile.conf": ("0 1000", "0 700 1400 2100", "5 1485 1510 2980 3010"),
+            "sms/profile.conf": ("0 1000 2000",),
+        }
+        self.assertEqual(set(own), {f"{p.parent.name}/{p.name}" for p in DATASETS.glob("*/profile*.conf")})
+        with tempfile.TemporaryDirectory() as temp:
+            bval = Path(temp) / "dwi.bval"
+
+            def warnings(profile: str, bvals: str) -> str:
+                bval.write_text(bvals + "\n", encoding="ascii")
+                return " ".join(shell_warnings(bval, DATASETS / profile))
+
+            for profile, protocols in own.items():
+                for bvals in protocols:
+                    with self.subTest(profile=profile, bvals=bvals):
+                        self.assertEqual("", warnings(profile, bvals))
+            # HCP-YA data under the ABCD profile: the fODF shells are not the ones it lists.
+            self.assertRegex(
+                warnings("abcd/profile.conf", "5 990 1005 1995 2005 2990 3010"),
+                r"give FODF_BVALS=\(0 1000 2000 3000\) .* written for FODF_BVALS=\(0 500 1000 2000 3000\)")
+            # HCP Aging data under the HCP-YA profile: the tensor shell differs too.
+            self.assertRegex(warnings("hcp-ya/profile.conf", "5 1485 1510 2980 3010"),
+                             r"DTI_BVALS=\(0 1500\); FODF_BVALS=\(0 1500 3000\)")
+            # ADNI's b=2000-only protocol: not what the profile lists, and a poor tensor shell.
+            self.assertRegex(warnings("adni/profile.conf", "0 2000 2000"),
+                             r"written for DTI_BVALS=\(0 1000\).*outside b = 700-1500")
+            # explicit: the listed shells are used as written, so only a missing one is reported.
+            self.assertRegex(warnings("abcd/profile.historical.conf", "0 1000 2000"),
+                             r"lists b = 3000 .* shells are b = 1000, 2000")
+
+    @unittest.skipUnless(BASH, "bash is required to run the shipped stage scripts")
     def test_shipped_registration_stops_multishell_without_policy_before_any_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             pipeline = self._registration_tree(Path(temp), "0 1000 2000 3000")
@@ -852,7 +924,8 @@ class WorkflowExecutorTests(unittest.TestCase):
                 self.assertEqual(expected, self._extract_shell_args(calls), completed.stdout + completed.stderr)
                 shells = {"dwi_dti" in c: c for c in calls if c.startswith("scil_dwi_extract_shell")}
                 self.assertIn(f"--tolerance {fodf_tolerance} ", shells[False])  # fODF extraction
-                self.assertIn("--tolerance 20 ", shells[True])  # DTI keeps the original
+                # The tensor extraction: the shell's own +-50 window under `all`, else 20.
+                self.assertIn(f"--tolerance {50 if 'all' in extra else 20} ", shells[True])
 
     @unittest.skipUnless(BASH, "bash is required to run the shipped stage scripts")
     def test_shipped_fodf_stage_keeps_adni_ssst_order_6_and_reads_sh_order(self) -> None:
@@ -1039,8 +1112,11 @@ class WorkflowExecutorTests(unittest.TestCase):
                 self.assertIn(config_setting(profile, "SHELL_POLICY"), SHELL_POLICIES)
                 self.assertIn(config_setting(profile, "FODF_MODEL"), FODF_MODELS)
                 self.assertIn(config_setting(profile, "FMRI_MOTION_REGRESSORS"), ("mcextreg", "tsv"))
+                # The generic profile takes the SH order, the TR and the route from each run.
+                generic = profile.parent.name == "generic"
                 for key in ("SH_ORDER", "FMRI_TR", "FMRI_SKIP_SECONDS", "FMRI_POLYFIT", "FMRI_STC"):
-                    self.assertIsNotNone(config_setting(profile, key), key)
+                    if not (generic and key in ("SH_ORDER", "FMRI_TR")):
+                        self.assertIsNotNone(config_setting(profile, key), key)
                 # Legacy scilpy's strict < 20 is scilpy 2.x's inclusive 19 (lab DB drops HCP b=2980).
                 historical = profile.name == "profile.historical.conf"
                 self.assertEqual("19" if historical else None, config_setting(profile, "FODF_TOLERANCE"))
@@ -1048,7 +1124,8 @@ class WorkflowExecutorTests(unittest.TestCase):
                 text = profile.read_text(encoding="utf-8")
                 for key in ("OUTPUT_PATH", "SBCI_PATH", "PSC_PATH", "FREESURFER_PATH", "TEMPLATEDIR", "REFDIR"):
                     self.assertNotRegex(text, rf"(?m)^\s*(export\s+)?{key}=", key)
-                self.assertIn(config_setting(profile, "INPUT_ROUTE"), ("raw", "corrected", "corrected_dwi_raw_bold"))
+                self.assertIn(config_setting(profile, "INPUT_ROUTE"),
+                              (None,) if generic else ("raw", "corrected", "corrected_dwi_raw_bold"))
 
     def test_sbci_stage_config_takes_n_runs_from_the_profile(self) -> None:
         """The lab's ABCD database ran 3 SET sets (40 of 40 subjects sampled), HCP 4. The SBCI

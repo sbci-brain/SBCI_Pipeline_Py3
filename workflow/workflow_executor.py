@@ -63,6 +63,8 @@ NATIVE_COMMANDS = {
 }
 
 SHELL_POLICIES = ("nearest_1000", "all", "explicit")
+# b-values where the tensor model fits well; a tensor shell outside it gets a warning.
+TENSOR_SHELL_RANGE = (700, 1500)
 FODF_MODELS = ("auto", "ssst")
 MOTION_REGRESSORS = ("mcextreg", "tsv")
 
@@ -121,6 +123,136 @@ def dwi_shells(bval: Path) -> list[int]:
     return sorted(rounded - {0})
 
 
+def nearest_1000(shells: Sequence[int]) -> int:
+    """The shell nearest b = 1000, as preproc_step2 picks it; of two equally near, the higher."""
+    return min(shells, key=lambda shell: (abs(shell - 1000), -shell))
+
+
+def config_shells(config: Path, key: str) -> list[int] | None:
+    """The non-zero shells of a `KEY=(0 1000 2000)` line, rounded as dwi_shells rounds them.
+    None when the profile has no such line."""
+    shells = None
+    for line in config.read_text(encoding="utf-8-sig").splitlines():
+        match = re.match(rf"\s*(?:export\s+)?{key}=\(([^()$`]*)\)\s*(?:#.*)?$", line)
+        if match:
+            try:
+                values = [float(word.strip("'\"")) for word in match.group(1).split()]
+            except ValueError:
+                return None
+            shells = sorted({int(value / 100 + 0.5) * 100 for value in values} - {0})
+    return shells
+
+
+def shell_warnings(bval: Path, config: Path) -> list[str]:
+    """What a user should know about the shells this profile takes from this DWI. None of it
+    stops a run; what does stop one is check_shell_policy's.
+
+    - The tensor fit on a shell outside TENSOR_SHELL_RANGE: its FA drives the T1-to-DWI
+      registration, and the tensor model fits poorly there.
+    - Shells that are not the ones the profile lists in DTI_BVALS / FODF_BVALS. Under
+      nearest_1000 and all those lines select nothing, so they say what the profile expects;
+      a difference is the one sign in the data that it is not the profile's dataset.
+    """
+    policy = config_setting(config, "SHELL_POLICY") or "nearest_1000"
+    shells = dwi_shells(bval)
+    if not shells or policy not in SHELL_POLICIES:
+        return []
+    listed = {key: config_shells(config, key) for key in ("DTI_BVALS", "FODF_BVALS")}
+    found = ", ".join(map(str, shells))
+    warnings: list[str] = []
+    if policy == "explicit":
+        tensor = listed["DTI_BVALS"] or []
+        absent = sorted({shell for value in listed.values() for shell in value or []} - set(shells))
+        if absent:
+            warnings.append(
+                f"{config} lists b = {', '.join(map(str, absent))} in DTI_BVALS/FODF_BVALS, but this DWI's shells "
+                f"are b = {found}: the data may not be the acquisition this profile was written for."
+            )
+    else:
+        tensor = [nearest_1000(shells)]
+        selected = {"DTI_BVALS": tensor, "FODF_BVALS": shells if policy == "all" else tensor}
+        differing = [key for key in selected if listed[key] is not None and listed[key] != selected[key]]
+        if differing:
+            expected = "; ".join(f"{key}=(0 {' '.join(map(str, listed[key]))})" for key in differing)
+            used = "; ".join(f"{key}=(0 {' '.join(map(str, selected[key]))})" for key in differing)
+            warnings.append(
+                f"This DWI's shells (b = {found}) give {used} under SHELL_POLICY={policy}, but {config} was "
+                f"written for {expected}: the data may not be the acquisition this profile was written for. "
+                "The run uses the shells of the data."
+            )
+    low, high = TENSOR_SHELL_RANGE
+    outside = [shell for shell in tensor if not low <= shell <= high]
+    if outside:
+        warnings.append(
+            f"The tensor fit uses b = {', '.join(map(str, outside))}, outside b = {low}-{high} where the tensor "
+            "model fits well. Its FA drives the T1-to-DWI registration: check that registration."
+        )
+    return warnings
+
+
+def validation_status(record: Path) -> str:
+    """`validated` when a dataset's validation.md says so; anything else is `untested`."""
+    try:
+        text = record.read_text(encoding="utf-8")
+    except OSError:
+        return "untested"
+    match = re.search(r"(?m)^\|\s*Status\s*\|\s*`?(\w+)`?\s*\|", text)
+    return "validated" if match and match.group(1) == "validated" else "untested"
+
+
+def profile_record(value: Any) -> dict[str, str | None]:
+    """What a run records about its profile (config/versions.json).
+
+    profile_status is `validated` or `untested` when the file equals a profile shipped in
+    datasets/, by that dataset's validation.md, and `modified` for any other file: changed, or
+    written by the user. `validated` says the profile was validated on its own dataset;
+    nothing can show that the data of a run are that dataset.
+    """
+    path = profile_path(value)
+    if path is None or not Path(path).is_file():
+        return {"profile": None, "dataset_name": None, "profile_status": None}
+    config = Path(path)
+    content = config.read_bytes().replace(b"\r\n", b"\n")
+    name, status = str(config), "modified"
+    for shipped in sorted((PIPELINE_ROOT / "datasets").glob("*/profile*.conf")):
+        if shipped.read_bytes().replace(b"\r\n", b"\n") == content:
+            name = shipped.relative_to(PIPELINE_ROOT).as_posix()
+            status = validation_status(shipped.parent / "validation.md")
+            break
+    try:
+        dataset = config_setting(config, "DATASET_NAME")
+    except RuntimeError:
+        dataset = None
+    return {"profile": name, "dataset_name": dataset, "profile_status": status}
+
+
+def profile_warnings(workflow: Mapping[str, Any], inventory: Mapping[str, Any]) -> list[str]:
+    """Warnings for the preflight and the job log: a profile no validation record covers, and
+    shell_warnings. They never stop a run."""
+    value = workflow.get("preprocessing_config")
+    record = profile_record(value)
+    if record["profile"] is None:
+        return []
+    warnings: list[str] = []
+    if record["profile_status"] == "untested":
+        warnings.append(
+            f"{record['profile']} is marked untested: no dataset has been validated with it. "
+            "Check the outputs of this run yourself (config/versions.json records this)."
+        )
+    elif record["profile_status"] == "modified":
+        warnings.append(
+            f"{record['profile']} is not one of the profiles shipped in datasets/ (it was changed, or written "
+            "for this data), so no validation record covers this run (config/versions.json records this)."
+        )
+    bval = (inventory.get("sidecars") or {}).get("dwiBval")
+    if bval and Path(bval).is_file():
+        try:
+            warnings += shell_warnings(Path(bval), Path(str(profile_path(value))))
+        except (RuntimeError, ValueError, OSError):
+            pass  # an unreadable profile or b-value file is reported by the checks that stop a run
+    return warnings
+
+
 def check_shell_policy(bval: Path, config: Path) -> None:
     """Refuse multi-shell data that has no explicit SHELL_POLICY (see preproc_step2)."""
     policy = config_setting(config, "SHELL_POLICY")
@@ -130,7 +262,7 @@ def check_shell_policy(bval: Path, config: Path) -> None:
     if not shells:
         raise RuntimeError(f"No non-zero b-value shell in {bval}.")
     if len(shells) > 1 and policy is None:
-        kept = min(shells, key=lambda shell: abs(shell - 1000))
+        kept = nearest_1000(shells)
         raise RuntimeError(
             f"DWI has {len(shells)} non-zero shells (b = {', '.join(map(str, shells))}) and {config} sets no "
             f"SHELL_POLICY, so only b = {kept} would be used and the other shells discarded. Set "

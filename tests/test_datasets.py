@@ -13,7 +13,13 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_validation_record as check  # noqa: E402
-from workflow.workflow_executor import config_setting, profile_path  # noqa: E402
+from workflow.workflow_executor import (  # noqa: E402
+    config_setting,
+    config_shells,
+    profile_path,
+    profile_record,
+    profile_warnings,
+)
 
 DATASETS = ROOT / "datasets"
 FOLDERS = sorted(path for path in DATASETS.iterdir() if path.is_dir())
@@ -21,7 +27,7 @@ FOLDERS = sorted(path for path in DATASETS.iterdir() if path.is_dir())
 
 class DatasetFolderTests(unittest.TestCase):
     def test_every_dataset_ships_profile_description_and_record(self) -> None:
-        self.assertEqual(["abcd", "adni", "hcp-lifespan", "hcp-ya"], [path.name for path in FOLDERS])
+        self.assertEqual(["abcd", "adni", "generic", "hcp-lifespan", "hcp-ya", "sms"], [path.name for path in FOLDERS])
         for folder in FOLDERS:
             with self.subTest(dataset=folder.name):
                 for name in ("profile.conf", "README.md", "validation.md"):
@@ -41,7 +47,8 @@ class DatasetFolderTests(unittest.TestCase):
         for folder in FOLDERS:
             with self.subTest(dataset=folder.name):
                 _, _, route, profiles, validated_on, status = rows[folder.name]
-                self.assertEqual(config_setting(folder / "profile.conf", "INPUT_ROUTE"), route.strip("`"))
+                # The generic profile names no route, and its row says "any".
+                self.assertEqual(config_setting(folder / "profile.conf", "INPUT_ROUTE") or "any", route.strip("`"))
                 self.assertEqual(sorted(path.name for path in folder.glob("profile*.conf")),
                                  sorted(name.strip(" `") for name in profiles.split(",")))
                 record = check.read_record(folder / "validation.md")
@@ -59,6 +66,45 @@ class DatasetFolderTests(unittest.TestCase):
                         self.assertEqual(config_setting(folder / "profile.conf", key), config_setting(historical, key), key)
                     self.assertEqual("ssst", config_setting(historical, "FODF_MODEL"))
                     self.assertEqual("explicit", config_setting(historical, "SHELL_POLICY"))
+
+    def test_generic_profile_takes_shells_and_tr_from_the_data_and_is_untested(self) -> None:
+        """For a dataset with no folder of its own: nothing in it may tie a run to one
+        acquisition, and no record may call it validated."""
+        generic = DATASETS / "generic" / "profile.conf"
+        self.assertEqual("all", config_setting(generic, "SHELL_POLICY"))
+        self.assertEqual("auto", config_setting(generic, "FODF_MODEL"))
+        for key in ("INPUT_ROUTE", "FMRI_TR", "SH_ORDER", "FODF_TOLERANCE"):
+            self.assertIsNone(config_setting(generic, key), key)
+        for key in ("DTI_BVALS", "FODF_BVALS"):
+            self.assertIsNone(config_shells(generic, key), key)
+        self.assertEqual("untested", check.read_record(DATASETS / "generic" / "validation.md")["Status"])
+
+    def test_a_run_records_whether_a_validation_record_covers_its_profile(self) -> None:
+        for folder in FOLDERS:
+            for profile in sorted(folder.glob("profile*.conf")):
+                with self.subTest(profile=f"{folder.name}/{profile.name}"):
+                    relative = f"datasets/{folder.name}/{profile.name}"
+                    record = profile_record(relative)
+                    self.assertEqual(relative, record["profile"])
+                    self.assertEqual(check.read_record(folder / "validation.md")["Status"], record["profile_status"])
+                    self.assertEqual(config_setting(profile, "DATASET_NAME"), record["dataset_name"])
+                    self.assertEqual(record, profile_record(str(profile)))
+        with tempfile.TemporaryDirectory() as temp:
+            copy = Path(temp) / "profile.conf"
+            shipped = (DATASETS / "adni" / "profile.conf").read_bytes()
+            copy.write_bytes(shipped)  # an unchanged copy is still the shipped profile
+            self.assertEqual("validated", profile_record(str(copy))["profile_status"])
+            self.assertEqual("datasets/adni/profile.conf", profile_record(str(copy))["profile"])
+            copy.write_bytes(shipped.replace(b"SH_ORDER=6", b"SH_ORDER=8"))
+            changed = profile_record(str(copy))
+            self.assertEqual(("modified", str(copy), "ADNI"),
+                             (changed["profile_status"], changed["profile"], changed["dataset_name"]))
+            self.assertIn("not one of the profiles shipped",
+                          " ".join(profile_warnings({"preprocessing_config": str(copy)}, {})))
+        self.assertEqual([], profile_warnings({"preprocessing_config": "datasets/adni/profile.conf"}, {}))
+        self.assertIn("untested", " ".join(profile_warnings({"preprocessing_config": "datasets/generic/profile.conf"}, {})))
+        self.assertEqual({"profile": None, "dataset_name": None, "profile_status": None}, profile_record(None))
+        self.assertEqual([], profile_warnings({}, {}))
 
     def test_example_config_names_a_shipped_profile(self) -> None:
         example = json.loads((DATASETS / "sbci_local.example.json").read_text(encoding="utf-8"))

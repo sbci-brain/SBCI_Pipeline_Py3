@@ -109,6 +109,8 @@ for s in plan.get("stages", []):
     print(f"  {s['id']:<22} {s.get('state')}", "MISSING: " + " ".join(missing) if missing else "")
 for b in plan.get("blockers") or []:
     print("  blocker:", b)
+for w in plan.get("warnings") or []:
+    print("  warning:", w.get("message", ""))
 for i in m.get("issues", []):
     print("  issue:", i.get("code"), i.get("message", "")[:300])
 sys.exit(0 if plan.get("readyToRun") else 1)
@@ -129,6 +131,28 @@ print(profile_path((json.load(open(sys.argv[1])).get("workflow") or {}).get("pre
 PIPELINE_VERSION="$(basename "$PIPELINE")@$(find run_pipeline.py pipeline preprocessing corrections workflow datasets data -type f ! -path '*/__pycache__/*' | LC_ALL=C sort | xargs sha256sum | sha256sum | cut -c1-12)"
 printf '{"pipeline": "%s", "pipeline_version": "%s", "container": "%s", "container_version": "%s", "stages": "%s"}\n' \
     "$PIPELINE" "$PIPELINE_VERSION" "$SIF" "$CONTAINER_VERSION" "$STAGES" > "$OUT/config/versions.json"
+# Which profile, its DATASET_NAME, and whether a validation record covers it
+# (validated, untested or modified: datasets/README.md).
+python3 - "$IN/sbci_local.json" "$OUT/config/versions.json" <<'PY'
+import json, sys
+from workflow.workflow_executor import profile_record
+versions = json.load(open(sys.argv[2]))
+versions.update(profile_record((json.load(open(sys.argv[1])).get("workflow") or {}).get("preprocessing_config")))
+json.dump(versions, open(sys.argv[2], "w"))
+PY
+
+# Prints the warnings of a run's manifest (an untested profile, unexpected shells). Once per job.
+warned=""
+warnings() {
+    [ -z "$warned" ] && [ -s "$1" ] || return 0
+    warned=1
+    python3 - "$1" <<'PY'
+import json, sys
+plan = (json.load(open(sys.argv[1])).get("workflow") or {}).get("plan") or {}
+for w in plan.get("warnings") or []:
+    print("WARNING:", w.get("message", ""))
+PY
+}
 
 # Prints "<status> <stage> <state> <next pending stage>" from a run's manifest.
 summary() {
@@ -153,6 +177,7 @@ for i in $(seq 1 10); do
     python3 run_pipeline.py --input "$IN" --output "$OUT" > "$OUT/logs/call_$i.json" 2> "$OUT/logs/call_$i.err"
     rc=$?
     summary "$OUT/local_adapter_manifest.json"
+    warnings "$OUT/local_adapter_manifest.json"
     if [ "$rc" -ne 0 ]; then
         echo "STOPPED: preprocessing call $i failed (rc=$rc); see the issue above and $OUT/logs/." >&2
         exit 1

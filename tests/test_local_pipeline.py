@@ -276,6 +276,53 @@ class LocalPipelineTests(unittest.TestCase):
                     self.assertEqual("profile_mismatch", manifest["workflow"]["plan"]["blockers"][0]["code"])
                     self.assertIn("RepetitionTime is 3 s", " ".join(row["message"] for row in manifest["issues"]))
 
+    def test_preflight_warns_without_blocking(self) -> None:
+        """An untested profile, or shells that are not the ones a profile lists, are shown in
+        the plan as warnings; they are not issues and block nothing."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            input_dir = root / "input"
+            (input_dir / "sub-001" / "dwi_pipeline").mkdir(parents=True)
+            bval = root / "dwi.bval"
+            bval.write_text("5 990 1005 1995 2005 2990 3010\n", encoding="ascii")  # HCP-YA's shells
+            inventory = {"raw": {"t1": "t1", "dwi": "dwi", "bold": "bold"}, "completed": {},
+                         "sbciReady": False, "pscReady": False, "sidecars": {"dwiBval": str(bval)},
+                         "rawMetadata": {"bold": {"repetitionTime": 0.8}}}
+            for profile, expected in (
+                ("datasets/abcd/profile.conf", ["written for FODF_BVALS=(0 500 1000 2000 3000)"]),
+                ("datasets/generic/profile.conf", ["marked untested"]),
+                ("datasets/hcp-lifespan/profile.conf", ["written for DTI_BVALS=(0 1500); FODF_BVALS=(0 1500 3000)"]),
+            ):
+                with self.subTest(profile=profile):
+                    output_dir = root / profile.split("/")[1]
+                    (input_dir / "sbci_local.json").write_text(json.dumps({
+                        "schema_version": "1.0", "mode": "inspect",
+                        "workflow": {"distortion_corrected_input": True, "preprocessing_config": profile},
+                    }), encoding="utf-8")
+                    plan = {
+                        "readyToRun": True,
+                        "stages": [
+                            {"id": "dwi_correction", "state": "pending", "missingCommands": []},
+                            {"id": "fsfast", "state": "pending", "missingCommands": []},
+                        ],
+                        "blockers": [],
+                    }
+                    with (
+                        mock.patch.object(local_pipeline, "inventory_subject", return_value=inventory),
+                        mock.patch.object(local_pipeline, "plan_workflow", return_value=plan),
+                        mock.patch.object(local_pipeline, "probe_commands", return_value={"commands": COMMANDS_FOR_PREPROCESS_TEST}),
+                        mock.patch.object(local_pipeline, "runtime_probe", return_value={"ready": True}),
+                    ):
+                        local_pipeline.main(["--input", str(input_dir), "--output", str(output_dir)])
+                    manifest = json.loads((output_dir / "local_adapter_manifest.json").read_text(encoding="utf-8"))
+                    plan = manifest["workflow"]["plan"]
+                    self.assertEqual(len(expected), len(plan["warnings"]), plan["warnings"])
+                    for text, row in zip(expected, plan["warnings"]):
+                        self.assertIn(text, row["message"])
+                    self.assertEqual([], plan["blockers"])
+                    self.assertTrue(plan["readyToRun"])
+                    self.assertEqual([], manifest["issues"])
+
     def test_multishell_registration_without_shell_policy_fails_preflight(self) -> None:
         """The silent failure this guards against exited 0 having used one shell
         of three; it must instead stop, exit non-zero, and say why in issues."""

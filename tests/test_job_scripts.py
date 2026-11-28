@@ -249,6 +249,21 @@ class ShippedSkillTests(unittest.TestCase):
         tool = (ROOT / "workflow" / "sbci_tool.sbatch").read_text(encoding="utf-8")
         self.assertIn("the sbci analysis package is not installed", tool)
 
+    def test_self_test_is_one_call_before_any_subject_work(self) -> None:
+        """Mode self_test has no stages: the job makes one call and ends with its result,
+        before the SBCI config, the preflight and the stage loop (which would repeat the call
+        ten times and end as a failure)."""
+        subject = (ROOT / "workflow" / "run_subject.sbatch").read_text(encoding="utf-8")
+        start = subject.index('if [ "$MODE" = self_test ]; then')
+        end = subject.index("\nfi\n", start)
+        block = subject[start:end]
+        self.assertEqual(1, block.count("python3 run_pipeline.py "))
+        self.assertIn('exit "$rc"', block)
+        for later in ("sbci_stage_config", 'if [ -n "$INSPECT" ]; then', "for i in $(seq 1 10); do"):
+            self.assertLess(end, subject.index(later), later)
+        example = json.loads((ROOT / "workflow" / "sbci_self_test.example.json").read_text(encoding="utf-8"))
+        self.assertEqual("self_test", example["mode"])
+
 
 if __name__ == "__main__":
     unittest.main()

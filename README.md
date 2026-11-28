@@ -20,66 +20,101 @@ stages, checks each one's outputs, resumes after an interruption and runs everyt
 
 **Status: release 20261123.** One subject each of ADNI, ABCD, HCP Aging and HCP Young
 Adult has run end to end on this layout; the numbers are in each dataset's `validation.md`
-([Datasets](#datasets)).
+([Settings](#settings)).
 
-## One subject in three commands
+## Start here
 
-On Linux (or WSL) with Apptainer or Docker, and MATLAB on `PATH` (on a cluster, load both
-before submitting, e.g. `module load apptainer matlab`):
+| You are | Read |
+|---|---|
+| new to this | [**GETTING_STARTED.md**](GETTING_STARTED.md): every step from nothing installed to the first results, for a Linux workstation (or Windows with WSL 2) and for a computing centre with Slurm, with what you should see at each step |
+| used to containers or Slurm | [Two ways to run](#two-ways-to-run) and [Quick start](#quick-start), below |
+| looking something up | the contents list |
+
+**Contents:** [Two ways to run](#two-ways-to-run) · [Quick start](#quick-start) ·
+[What it needs](#what-it-needs) · [Input](#input) · [Settings](#settings) ·
+[What it does](#what-it-does) · [Output](#output) · [Reproducibility](#reproducibility) ·
+[The image](#the-image) · [When something stops](#when-something-stops) ·
+[Layout](#layout) · [Documentation](#documentation) · [Development](#development) ·
+[References](#references)
+
+## Two ways to run
+
+The same scripts serve a workstation and a cluster. They look at the machine and choose:
+Apptainer where it is on `PATH`, Docker otherwise; `sbatch` where there is Slurm, a
+background job otherwise.
+
+| | **Local Linux workstation** | **Computing centre** |
+|---|---|---|
+| Machine | Linux, or Windows with WSL 2; 16 cores and 64 GB | a cluster with Slurm; the job asks for 16 CPUs, 64 GB and 48 h |
+| Container program | Docker (or Apptainer) | Apptainer, usually `module load apptainer` |
+| MATLAB | a Linux install on `PATH` | the centre's module, loaded before submitting |
+| The image | `docker pull` by digest: 11 GB to download, about 40 GB unpacked | `sbci-full.sif` in the clone: 11 GB to download, then 2–3 hours packing on 4 cores, with room for about three times the file while it builds |
+| `submit.sh` | starts the job in the background on the machine; log at `--output`; other `sbatch` options do not apply | is `sbatch` with the options given (`--partition`, `--time`, …) |
+| Watching a job | `tail -f` on the log | `squeue`, and `tail -f` on the log |
+| Another image | `SBCI_DOCKER_IMAGE=name@digest` | `SBCI_FULL_IMAGE=/path/to/a.sif` |
+| Run so far | the image, the self-test and a preflight (on WSL 2); a whole subject not yet | whole subjects of four datasets: the validation records |
+
+`SBCI_CONTAINER=docker` or `SBCI_CONTAINER=apptainer` overrides the choice of container
+program. Give Docker at least 16 CPUs and 64 GB where it has limits of its own (Docker
+Desktop, WSL).
+
+macOS cannot finish a subject: MATLAB runs inside the container, so it must be a Linux
+MATLAB, and on Apple silicon the image runs under emulation. The scripts start there and say
+so. Use Linux, WSL or a cluster.
+
+## Quick start
+
+`IN` holds one subject folder and an `sbci_local.json` ([Input](#input)); `OUT` must exist.
+
+**Local Linux workstation** (Docker running, `matlab` on `PATH`):
 
 ```bash
 git clone https://github.com/sbci-brain/SBCI_Pipeline_Py3.git && cd SBCI_Pipeline_Py3
-bash workflow/get_image.sbatch                                   # once: fetches the image, about 11 GB
+bash workflow/get_image.sbatch                                   # once: pulls the image
+bash workflow/run_subject.sbatch --inspect IN OUT                # preflight, in seconds
 bash workflow/submit.sh --output=OUT/slurm-%j.out workflow/run_subject.sbatch IN OUT
+tail -f OUT/slurm-local-*.out
 ```
 
-`IN` holds one subject folder and an `sbci_local.json` ([below](#sbci_localjson)); `OUT`
-must exist. `submit.sh` is `sbatch` where there is Slurm and a background job elsewhere.
-Before the long run, the same script gives a preflight in seconds:
+**Computing centre** (Slurm):
 
 ```bash
-bash workflow/run_subject.sbatch --inspect IN OUT
+module load apptainer matlab                                     # your centre's module names
+git clone https://github.com/sbci-brain/SBCI_Pipeline_Py3.git && cd SBCI_Pipeline_Py3
+bash workflow/get_image.sbatch                                   # once, where there is internet: builds sbci-full.sif
+bash workflow/run_subject.sbatch --inspect IN OUT                # preflight, in seconds, on the login node
+bash workflow/submit.sh --output=OUT/slurm-%j.out workflow/run_subject.sbatch IN OUT
+squeue -u $USER
 ```
 
-It prints whether the run is ready, each stage's state and missing commands, and anything
-that blocks it. The run itself takes 6–18 h on 16 CPUs (the job asks for 16 CPUs, 64 GB and
-48 h) and writes about 30 GB. A rerun on the same `OUT` resumes after the last completed
-stage.
+Where compute nodes reach the internet, the image can be built as a job instead:
+`bash workflow/submit.sh workflow/get_image.sbatch`. Start every job with `submit.sh`, not
+with `sbatch` directly; site options go before the script name
+(`bash workflow/submit.sh --partition=general --output=… workflow/run_subject.sbatch IN OUT`).
+For many subjects, give each its own `IN` and `OUT` and submit one job per subject.
+
+What the commands do:
+
+- **The preflight** prints whether the run is ready, each stage's state and missing
+  commands, and anything that blocks it. Lines starting with `warning:` (a profile that was
+  not validated for this data, unexpected b-value shells) do not stop a run; the job log
+  repeats them.
+- **The run** takes 6–18 h on 16 CPUs and writes about 30 GB. It ends with
+  `finished=… rc=0`. A rerun on the same `OUT` resumes after the last completed stage.
+- **A self-test** needs no subject, no licence and no MATLAB: put a copy of
+  `workflow/sbci_self_test.example.json` in an empty `IN` as `sbci_local.json` and run
+  `bash workflow/run_subject.sbatch IN OUT`. In under a minute it checks the image's tools
+  and the clone's own data, and ends with `self-test passed`.
 
 ## What it needs
 
 | | |
 |---|---|
-| **Apptainer or Docker** | Every stage runs inside the image. Apptainer is used where it is on `PATH` (clusters); otherwise Docker ([below](#apptainer-or-docker)). |
-| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261123` from Docker Hub, pinned by digest (`workflow/image_pin.sh`). It needs internet, so on a cluster run it where there is some. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
+| **Apptainer or Docker** | Every stage runs inside the image. A job is `apptainer exec` with the run's folders bound, or `docker run` as your user with the run's folders mounted at their own paths. |
+| **The image `sbci-full`** | Holds every tool: FSL 6.0.7.18, ANTs 2.6.0, MRtrix3 3.0.8, FreeSurfer 6.0.0, Synb0-DISCO v3.1 and two Python environments. `workflow/get_image.sbatch` fetches `sdszhauk/sbci-image:20261123` from Docker Hub, pinned by digest (`workflow/image_pin.sh`). It needs internet. The recipe is in [SBCI_Images](https://github.com/sbci-brain/SBCI_Images). |
 | **MATLAB** (R2018b validated, a Linux install) on `PATH` | For the FSFast stage (`selxavg3-sess`); the job binds it into the image. It is not optional: the SBCI stage runs only after every preprocessing stage, so without MATLAB no subject finishes, SC included. FreeSurfer 6's compiled `selxavg3` does not replace it (it needs MATLAB Runtime R2014a; FreeSurfer 6 ships R2012b). |
 | **A FreeSurfer licence file** | Free from FreeSurfer's site (https://surfer.nmr.mgh.harvard.edu/registration.html); the image has none. Its path goes in `sbci_local.json`. |
 | **16 CPUs, 64 GB of memory, about 30 GB of disk per subject** | What `run_subject.sbatch` asks Slurm for, and what the validation runs used. |
-
-### Apptainer or Docker
-
-The same three commands serve both. The job scripts use Apptainer where it is on `PATH` and
-Docker otherwise; `SBCI_CONTAINER=docker` or `SBCI_CONTAINER=apptainer` chooses.
-
-| | Apptainer | Docker |
-|---|---|---|
-| Where | clusters, Linux, WSL | a Linux machine or WSL with Docker; no Slurm needed |
-| `get_image.sbatch` | builds `sbci-full.sif` in this folder: 11 GB to download, then 2–3 hours packing on 4 cores, and room for about three times that while it builds | `docker pull` by digest: 11 GB to download, about 40 GB unpacked |
-| Another image | `SBCI_FULL_IMAGE=/path/to/a.sif` | `SBCI_DOCKER_IMAGE=name@digest` |
-| A job | `apptainer exec` with the run's folders bound | `docker run` as your user, with the run's folders mounted at their own paths |
-
-Where there is no Slurm, `submit.sh` runs the job on the machine itself, in the background,
-with its log at `--output`. Give Docker at least 16 CPUs and 64 GB where it has limits of its
-own.
-
-The Docker route has been run on WSL: fetching the image, and the preflight of a test
-subject. A whole subject has not been run through it yet; the validation runs used Apptainer.
-
-MATLAB must be a Linux install on the machine that runs the job, because it runs inside the
-container. That rules out finishing a subject on macOS: the scripts no longer stop there,
-and Docker Desktop can run the image, but a macOS MATLAB cannot be used by the `fsfast`
-stage, and on Apple silicon the image runs under emulation. macOS is untested. Use a Linux
-machine, a cluster or WSL for real runs.
 
 ## Input
 
@@ -139,6 +174,82 @@ Copy `datasets/sbci_local.example.json`:
 
 `workflow/contracts/sbci.local.schema.json` lists every setting.
 
+## Settings
+
+The datasets differ in settings, not in code: every dataset runs the same stage scripts. A
+**profile** is a file of `NAME=value` lines for one kind of acquisition, and
+`datasets/<name>/` holds a dataset's profile, the input it expects and the record of its
+validation. `sbci_local.json` names the profile to use.
+
+### Datasets
+
+| Dataset | Folder | Route | Profiles | Status |
+|---|---|---|---|---|
+| ADNI | [`datasets/adni/`](datasets/adni/) | `raw` | `profile.conf` | validated on 20261122 |
+| ABCD | [`datasets/abcd/`](datasets/abcd/) | `corrected` | `profile.conf`, `profile.historical.conf` | validated on 20261122 |
+| HCP Aging / Development | [`datasets/hcp-lifespan/`](datasets/hcp-lifespan/) | `corrected` | `profile.conf`, `profile.historical.conf` | validated on 20261122 |
+| HCP Young Adult | [`datasets/hcp-ya/`](datasets/hcp-ya/) | `corrected_dwi_raw_bold` | `profile.conf` | validated on 20261122 |
+| SMS protocol study | [`datasets/sms/`](datasets/sms/) | `corrected_dwi_raw_bold` | `profile.conf` | untested |
+| Any other dataset | [`datasets/generic/`](datasets/generic/) | any | `profile.conf` | untested |
+
+`profile.conf` is the recommended profile for new processing. A `profile.historical.conf`
+reproduces how an existing lab database was built, for results to be pooled with it; the two
+give structural results that are not interchangeable.
+
+**The pipeline does not detect the dataset.** A run uses the profile `sbci_local.json`
+names, and records in `OUT/config/versions.json` the profile, its `DATASET_NAME` label and a
+`profile_status`: `validated` or `untested` when the file equals a shipped profile, by that
+dataset's record; `modified` for any other file. Two things are checked against the data and
+stop the run when they do not hold: the profile's `INPUT_ROUTE` against the two correction
+settings in `sbci_local.json`, and its `FMRI_TR` against the subject's TR. The rest gives a
+`warning:` line in the preflight and the job log, and the run continues: an `untested` or
+`modified` profile, shells other than the profile expects, a tensor shell outside
+b = 700–1500.
+
+For data with no folder of its own, use [`datasets/generic/`](datasets/generic/): it takes
+the shells, the fODF model, the SH order's default and the TR from the data. It is not
+validated on any dataset.
+
+### Diffusion: shells, fODF model and SH order
+
+A shell is the b-values that round to the same 100. Three profile settings decide what the
+diffusion stages do with them:
+
+| Setting | Values |
+|---|---|
+| `SHELL_POLICY` | `nearest_1000`: the tensor fit and the fODF both use the shell nearest b = 1000. `all`: the fODF uses every non-zero shell, the tensor fit the shell nearest b = 1000. `explicit`: `DTI_BVALS` and `FODF_BVALS` as written. |
+| `FODF_MODEL` | `auto`: single-shell CSD when one shell reaches the fODF, multi-shell multi-tissue CSD when several do. `ssst`: single-shell CSD whatever the shells. |
+| `SH_ORDER` | the spherical-harmonic order of the fODF. Without it: 6 for one shell, 8 for several. |
+
+| Profile | `SHELL_POLICY` | Tensor shell | fODF shells | fODF model | `SH_ORDER` |
+|---|---|---|---|---|---|
+| ADNI | `nearest_1000` | 1000 | 1000 | single-shell CSD | 6 |
+| ABCD | `all` | 1000 | 500, 1000, 2000, 3000 | multi-shell multi-tissue | 8 |
+| HCP Aging / Development | `all` | 1500 | 1500, 3000 | multi-shell multi-tissue | 8 |
+| HCP Young Adult | `all` | 1000 | 1000, 2000, 3000 | multi-shell multi-tissue | 8 |
+| SMS | `all` | 1000 | 1000, 2000 | multi-shell multi-tissue | 8 |
+| generic | `all` | nearest 1000, from the data | every shell in the data | by the number of shells | not set: 6 or 8 |
+| ABCD, HCP Aging / Development, historical | `explicit` | 1000; 1500 | 1000, 2000, 3000; 1500, 3000 | single-shell CSD (`ssst`) | 8 |
+
+- **The tensor fit stays on one shell** also when the fODF uses all of them: the tensor
+  model holds to about b = 1500, and its FA drives the T1-to-DWI registration. Of two shells
+  equally near 1000 the higher is used.
+- **A volume belongs to a shell** when its b-value is within 50 of it under `all`, and
+  within 20 under the other two policies (`FODF_TOLERANCE` changes that for the fODF).
+- **Multi-shell data with no `SHELL_POLICY`** stops the registration stage before it
+  starts; single-shell data needs none.
+- **SH order L needs (L+1)(L+2)/2 distinct gradient directions** among the fODF volumes: 15
+  for order 4, 28 for order 6, 45 for order 8. This is checked when the fODF stage starts,
+  which is after FreeSurfer, hours into the run; the stage then stops and names the highest
+  order the data support. The preflight does not check it. For a new dataset, count the
+  directions first and set `SH_ORDER` in a copy of the profile, or
+  `"parameters": {"sh_order": 6}` in `sbci_local.json` (not both with different values).
+
+[`datasets/README.md`](datasets/README.md) explains every setting, including the fMRI ones
+(`FMRI_TR`, skipped seconds, slice timing, motion regressors) and the tractography ones (in
+the recommended profiles, 4 SET repetitions of 1,000,000 seeds per hemisphere and a
+bandwidth of 0.005), and how to add a dataset.
+
 ## What it does
 
 `run_subject.sbatch` calls `run_pipeline.py` once per stage. Each stage has a list of
@@ -165,7 +276,8 @@ off by default and is not covered by the validation records.
 ```
 OUT/
   config/                      sbci_local.json and the profile as they were used; versions.json
-                               (the hash of the pipeline's files, and the image)
+                               (the hash of the pipeline's files, the image, and the profile:
+                               profile, dataset_name, profile_status)
   logs/                        one .json and .err per stage call; inspect.json for the preflight
   local_adapter_manifest.json  the state of the preprocessing stages
   files/preprocessing_work/<subject>/     the work tree of the stages above
@@ -190,24 +302,6 @@ To check a finished run against a dataset's record:
 python3 tests/check_validation_record.py OUT datasets/adni/validation.md
 ```
 
-## Datasets
-
-The datasets differ in settings, not in code: every dataset runs the same stage scripts, and
-`datasets/<name>/` holds its profile, the input it expects and the record of its validation.
-
-| Dataset | Folder | Route | Profiles | Validated on |
-|---|---|---|---|---|
-| ADNI | [`datasets/adni/`](datasets/adni/) | `raw` | `profile.conf` | 20261122 |
-| ABCD | [`datasets/abcd/`](datasets/abcd/) | `corrected` | `profile.conf`, `profile.historical.conf` | 20261122 |
-| HCP Aging / Development | [`datasets/hcp-lifespan/`](datasets/hcp-lifespan/) | `corrected` | `profile.conf`, `profile.historical.conf` | 20261122 |
-| HCP Young Adult | [`datasets/hcp-ya/`](datasets/hcp-ya/) | `corrected_dwi_raw_bold` | `profile.conf` | 20261122 |
-
-A profile is a file of `NAME=value` lines: which b-value shells reach the tensor fit and the
-fODF, the fODF model and order, the fMRI timing, and the tractography settings (in the
-recommended profiles, 4 SET repetitions of 1,000,000 seeds per hemisphere and a bandwidth of
-0.005). [`datasets/README.md`](datasets/README.md) explains every setting, the difference
-between the recommended and the historical profiles, and how to add a dataset.
-
 ## Reproducibility
 
 Two runs of the same input on the same image agree in every value of the surfaces and SC, and
@@ -223,7 +317,8 @@ correlate at about 0.998). [`datasets/adni/validation.md`](datasets/adni/validat
 the size of that variation for every result.
 
 Every run records what it ran with: `OUT/config/versions.json` holds one hash over the
-pipeline's files and the image's name, beside the configuration and the profile as used.
+pipeline's files, the image's name, and the profile's name, dataset label and status
+(`profile`, `dataset_name`, `profile_status`), beside the configuration and the profile as used.
 
 ## The image
 
@@ -251,7 +346,7 @@ name it in `SBCI_PIPELINE`, so there is one set of scripts, and a code change ne
 | `needs Apptainer or Docker on PATH` | Install or load one (`module load apptainer` on a cluster). |
 | `Docker has no image …` | Run `bash workflow/get_image.sbatch` once; with Docker it pulls the pinned image. |
 | `readlink: illegal option -- m` | An earlier copy of the scripts on macOS; update the clone (`git pull`). |
-| `this machine is Darwin: FSFast … needs a Linux MATLAB` | Expected on macOS: see [Apptainer or Docker](#apptainer-or-docker). |
+| `this machine is Darwin: FSFast … needs a Linux MATLAB` | Expected on macOS: see [Two ways to run](#two-ways-to-run). |
 | `no sbci-full image at …` | Run `bash workflow/get_image.sbatch` once, or set `SBCI_FULL_IMAGE` to a copy. |
 | `WARNING: no matlab on PATH` | Put MATLAB on `PATH` before submitting (`module load matlab`); the preflight lists `matlab` as missing for `fsfast`. |
 | `cannot find the pipeline folder` | Start the job with `workflow/submit.sh`, not with `sbatch` directly: Slurm runs a copy of the script from its spool folder. |
@@ -277,7 +372,8 @@ name it in `SBCI_PIPELINE`, so there is one set of scripts, and a code change ne
 
 | Read | For |
 |---|---|
-| [`datasets/README.md`](datasets/README.md) | every profile setting, the input layout, recommended against historical profiles, adding a dataset |
+| [`GETTING_STARTED.md`](GETTING_STARTED.md) | a first subject step by step, on a Linux workstation (or Windows with WSL 2) or on a computing centre with Slurm |
+| [`datasets/README.md`](datasets/README.md) | every profile setting, the input layout, b-value shells, recommended against historical profiles, a dataset that is not listed, adding a dataset |
 | `datasets/<name>/README.md` | what that dataset's input must hold and how its acquisition is handled |
 | `datasets/<name>/validation.md` | the subject, date, image and numbers of that dataset's validation |
 | `workflow/contracts/sbci.local.schema.json` | every setting of `sbci_local.json` |

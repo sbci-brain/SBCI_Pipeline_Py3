@@ -73,6 +73,28 @@ SIF=${SBCI_IMAGE_FILE:-$SBCI_IMAGE} CONTAINER_VERSION=$SBCI_IMAGE
 [ -n "${FREESURFER_HOME:-}" ] && export MATLABPATH="$FREESURFER_HOME/fsfast/toolbox:$FREESURFER_HOME/matlab${MATLABPATH:+:$MATLABPATH}"
 mkdir -p "$OUT/logs" "$OUT/sbci_input"
 cd "$PIPELINE" || exit 2
+# Mode "self_test" (workflow/sbci_self_test.example.json as sbci_local.json): one call that
+# checks the image's tools and this folder's own data. No subject, no licence, no MATLAB;
+# under a minute. Nothing below applies to it.
+MODE=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("mode", ""))' "$IN/sbci_local.json")
+if [ "$MODE" = self_test ]; then
+    python3 run_pipeline.py --input "$IN" --output "$OUT" > "$OUT/logs/self_test.json" 2> "$OUT/logs/self_test.err"
+    rc=$?
+    python3 - "$OUT/local_adapter_manifest.json" <<'PY' || rc=1
+import json, sys
+m = json.load(open(sys.argv[1]))
+test = m.get("selfTest") or {}
+for name, check in (test.get("checks") or {}).items():
+    ok = check.get("ready") if isinstance(check, dict) else check
+    print(f"  {name:<28} {'ok' if ok else 'FAILED'}")
+for i in m.get("issues", []):
+    print("  issue:", i.get("code"), i.get("message", "")[:300])
+print("self-test", "passed" if test.get("ready") else "FAILED", f"(status {m.get('status')})")
+sys.exit(0 if test.get("ready") else 1)
+PY
+    [ "$rc" -eq 0 ] || echo "See $OUT/logs/self_test.err and $OUT/logs/runtime_self_test.log." >&2
+    exit "$rc"
+fi
 # workflow.stages: all | preprocess | tractography | fc.
 STAGES=$(python3 -c 'import json, sys; print((json.load(open(sys.argv[1])).get("workflow") or {}).get("stages", "all"))' "$IN/sbci_local.json")
 # The SBCI stage's own config, written now so a contradiction stops the job before hours
